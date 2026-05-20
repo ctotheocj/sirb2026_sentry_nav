@@ -16,10 +16,10 @@ point_lio:
     prop_at_freq_of_imu: True
     check_satu: True
     init_map_size: 10
-    point_filter_num: 8                                 # Options: 4, 3
+    point_filter_num: 3                                 # Options: 4, 3
     space_down_sample: True
     filter_size_surf: 0.2                               # Options: 0.5, 0.3, 0.2, 0.15, 0.1
-    filter_size_map: 0.2                                # Options: 0.5, 0.3, 0.15, 0.1
+    filter_size_map: 0.15                                # Options: 0.5, 0.3, 0.15, 0.1
     ivox_nearby_type: 18                                # Options: 0, 6, 18, 26
     runtime_pos_log_enable: False                       # Option: True
 
@@ -48,9 +48,9 @@ point_lio:
       imu_en: True
       extrinsic_est_en: False                           # for aggressive motion, set this variable False
       imu_time_inte: 0.005                              # = 1 / frequency of IMU
-      lidar_time_inte: 0.1
-      satu_acc: 4.0                                     # the saturation value of IMU's acceleration. not related to the units
-      satu_gyro: 35.0                                   # the saturation value of IMU's angular velocity. not related to the units
+      lidar_time_inte: 0.02
+      satu_acc: 2.5                                     # the saturation value of IMU's acceleration. not related to the units
+      satu_gyro: 20.0                                   # the saturation value of IMU's angular velocity. not related to the units
       acc_norm: 1.0                                     # 1.0 for g as unit, 9.81 for m/s^2 as unit of the IMU's acceleration
       lidar_meas_cov: 0.01                              # 0.001
       acc_cov_output: 500.0
@@ -64,8 +64,8 @@ point_lio:
       plane_thr: 0.1                                    # 0.05, the threshold for plane criteria, the smaller, the flatter a plane
       match_s: 81.0
       ivox_grid_resolution: 0.5
-      gravity: [0.0, 0.5305473804473877, -0.8383715748786926]            # gravity to be aligned
-      gravity_init: [0.0, 0.5305473804473877, -0.8383715748786926]       # preknown gravity in the first IMU body frame, use when imu_en is False or start from a non-stationary state
+      gravity: [5.18, 0.03, -8.33]
+      gravity_init: [5.18, 0.03, -8.33]
       extrinsic_T: [ -0.011, -0.02329, 0.04412 ]
       extrinsic_R: [ 1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,
