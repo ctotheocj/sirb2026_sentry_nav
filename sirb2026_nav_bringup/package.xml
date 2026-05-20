@@ -25,7 +25,6 @@
   <exec_depend>livox_ros_driver2</exec_depend>
   <exec_depend>point_lio</exec_depend>
 
-  <exec_depend>pb_omni_pid_pursuit_controller</exec_depend>
   <exec_depend>ndt_omp_relocalization</exec_depend>
   <exec_depend>dodge_manager</exec_depend>
   <exec_depend>hole_pass_controller</exec_depend>

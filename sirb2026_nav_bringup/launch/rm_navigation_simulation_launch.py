@@ -5,10 +5,10 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression, TextSubstitution
+from launch.substitutions import LaunchConfiguration, TextSubstitution
 from launch_ros.actions import Node
 from launch_ros.descriptions import ParameterFile
-from nav2_common.launch import ReplaceString, RewrittenYaml
+from nav2_common.launch import RewrittenYaml
 
 sys.path.append(os.path.dirname(__file__))
 from motion_profile_utils import prepare_motion_profile_params
@@ -41,7 +41,6 @@ def generate_launch_description():
     use_yaw_fusion        = LaunchConfiguration("use_yaw_fusion")
     use_dodge_manager     = LaunchConfiguration("use_dodge_manager")
     use_tf_jump_monitor   = LaunchConfiguration("use_tf_jump_monitor")
-    controller            = LaunchConfiguration("controller")
 
     declare_namespace_cmd = DeclareLaunchArgument(
         "namespace", default_value="red_standard_robot1",
@@ -86,25 +85,13 @@ def generate_launch_description():
     declare_use_tf_jump_monitor_cmd = DeclareLaunchArgument(
         "use_tf_jump_monitor", default_value="True",
     )
-    declare_controller_cmd = DeclareLaunchArgument("controller", default_value="mpc")
     prepare_motion_profile_cmd = OpaqueFunction(
         function=lambda context, *_: prepare_motion_profile_params(
             context, params_file, "simulation"))
 
-    params_file_with_world = ReplaceString(
-        source_file=params_file,
-        replacements={
-            "<controller_plugin>": PythonExpression([
-                '"pb_omni_pid_pursuit_controller::OmniPidPursuitController" if "',
-                controller, '" == "pid" else "f_mpc_controller::MpcController"',
-            ]),
-
-        },
-    )
-
     configured_params = ParameterFile(
         RewrittenYaml(
-            source_file=params_file_with_world,
+            source_file=params_file,
             root_key=namespace,
             param_rewrites={},
             convert_types=True,
@@ -129,7 +116,7 @@ def generate_launch_description():
             "map":                   map_yaml_file,
             "prior_pcd_file":        prior_pcd_file,
             "use_sim_time":          use_sim_time,
-            "params_file":           params_file_with_world,
+            "params_file":           params_file,
             "autostart":             autostart,
             "use_composition":       use_composition,
             "use_respawn":           use_respawn,
@@ -257,7 +244,7 @@ def generate_launch_description():
         launch_arguments={
             "namespace":       namespace,
             "use_sim_time":    use_sim_time,
-            "joy_config_file": params_file_with_world,
+            "joy_config_file": params_file,
         }.items(),
     )
 
@@ -288,7 +275,6 @@ def generate_launch_description():
     ld.add_action(declare_use_yaw_fusion_cmd)
     ld.add_action(declare_use_dodge_manager_cmd)
     ld.add_action(declare_use_tf_jump_monitor_cmd)
-    ld.add_action(declare_controller_cmd)
     ld.add_action(prepare_motion_profile_cmd)
 
     ld.add_action(start_velodyne_convert_tool)

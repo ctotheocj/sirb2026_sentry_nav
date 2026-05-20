@@ -40,8 +40,7 @@ LocalizationReadyCondition::LocalizationReadyCondition(
 
 BT::PortsList LocalizationReadyCondition::providedPorts()
 {
-  const std::string default_topics =
-    "small_gicp_relocalization/diagnostics,ndt_omp_relocalization/diagnostics";
+  const std::string default_topics = "ndt_omp_relocalization/diagnostics";
   return {
     BT::InputPort<std::string>(
       "diagnostics_topics", default_topics,
@@ -61,8 +60,7 @@ BT::PortsList LocalizationReadyCondition::providedPorts()
 
 std::vector<std::string> LocalizationReadyCondition::getDiagnosticsTopics()
 {
-  const std::string default_topics =
-    "small_gicp_relocalization/diagnostics,ndt_omp_relocalization/diagnostics";
+  const std::string default_topics = "ndt_omp_relocalization/diagnostics";
   std::string topics_text = default_topics;
   getInput("diagnostics_topics", topics_text);
   std::string legacy_topic;
@@ -84,7 +82,7 @@ std::vector<std::string> LocalizationReadyCondition::getDiagnosticsTopics()
     }
   }
   if (topics.empty()) {
-    topics.push_back("small_gicp_relocalization/diagnostics");
+    topics.push_back("ndt_omp_relocalization/diagnostics");
   }
   return topics;
 }

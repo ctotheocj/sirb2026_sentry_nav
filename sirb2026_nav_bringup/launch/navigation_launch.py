@@ -17,7 +17,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, OpaqueFunction, SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, GroupAction, SetEnvironmentVariable
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import LoadComposableNodes, Node
@@ -60,52 +60,6 @@ def generate_launch_description():
         ),
         allow_substs=True,
     )
-
-    def _obstacle_scan_qos_override(context):
-        ns = context.launch_configurations.get("namespace", "").strip("/")
-        topic = "/obstacle_scan" if not ns else f"/{ns}/obstacle_scan"
-        return {
-            f"qos_overrides.{topic}.publisher.reliability": "reliable",
-        }
-
-    def _make_pointcloud_to_laserscan_node(context, *_):
-        return [
-            Node(
-                package="pointcloud_to_laserscan",
-                executable="pointcloud_to_laserscan_node",
-                name="pointcloud_to_laserscan",
-                condition=IfCondition(PythonExpression(["not ", slam])),
-                output="screen",
-                respawn=use_respawn,
-                respawn_delay=2.0,
-                parameters=[configured_params, _obstacle_scan_qos_override(context)],
-                arguments=["--ros-args", "--log-level", log_level],
-                remappings=[
-                    ("cloud_in", "sensor_scan"),
-                    ("scan", "obstacle_scan"),
-                ],
-            )
-        ]
-
-    def _make_pointcloud_to_laserscan_composable(context, *_):
-        return [
-            LoadComposableNodes(
-                condition=IfCondition(PythonExpression(["not ", slam])),
-                target_container=container_name_full,
-                composable_node_descriptions=[
-                    ComposableNode(
-                        package="pointcloud_to_laserscan",
-                        plugin="pointcloud_to_laserscan::PointCloudToLaserScanNode",
-                        name="pointcloud_to_laserscan",
-                        parameters=[configured_params, _obstacle_scan_qos_override(context)],
-                        remappings=[
-                            ("cloud_in", "sensor_scan"),
-                            ("scan", "obstacle_scan"),
-                        ],
-                    ),
-                ],
-            )
-        ]
 
     stdout_linebuf_envvar = SetEnvironmentVariable(
         "RCUTILS_LOGGING_BUFFERED_STREAM", "1"
@@ -190,7 +144,6 @@ def generate_launch_description():
                 parameters=[configured_params],
                 arguments=["--ros-args", "--log-level", log_level],
             ),
-            OpaqueFunction(function=_make_pointcloud_to_laserscan_node),
             Node(
                 package="fake_vel_transform",
                 executable="fake_vel_transform_node",
@@ -470,11 +423,6 @@ def generate_launch_description():
         ],
     )
 
-    # Keep this as a separate action so the condition is evaluated at the
-    # LoadComposableNodes level. In SLAM mode, slam_launch.py owns obstacle_scan.
-    load_pointcloud_to_laserscan_composable = OpaqueFunction(
-        function=_make_pointcloud_to_laserscan_composable)
-
     ld = LaunchDescription()
 
     ld.add_action(stdout_linebuf_envvar)
@@ -492,6 +440,5 @@ def generate_launch_description():
     ld.add_action(load_nodes)
     ld.add_action(load_composable_nodes)
     ld.add_action(load_sensor_scan_generation_composable)
-    ld.add_action(load_pointcloud_to_laserscan_composable)
 
     return ld
