@@ -16,6 +16,16 @@ namespace hole_pass_controller
 namespace
 {
 constexpr double kEpsilon = 1e-9;
+
+bool hasParameterOverride(const rclcpp::NodeOptions & options, const std::string & name)
+{
+  const auto & overrides = options.parameter_overrides();
+  return std::any_of(
+    overrides.begin(), overrides.end(),
+    [&name](const rclcpp::Parameter & parameter) {
+      return parameter.get_name() == name;
+    });
+}
 }
 
 HolePassController::HolePassController(const rclcpp::NodeOptions & options)
@@ -38,6 +48,7 @@ HolePassController::HolePassController(const rclcpp::NodeOptions & options)
   declare_parameter("slow_speed", 0.25);
   declare_parameter("pass_speed", 0.45);
   declare_parameter("yaw_offset", 0.0);
+  declare_parameter("yaw_offset_deg", 0.0);
   declare_parameter("yaw_kp", 2.5);
   declare_parameter("max_v_yaw", 1.8);
   declare_parameter("exit_raise_distance", 0.2);
@@ -72,7 +83,24 @@ HolePassController::HolePassController(const rclcpp::NodeOptions & options)
   get_parameter("stop_distance", stop_distance_);
   get_parameter("slow_speed", slow_speed_);
   get_parameter("pass_speed", pass_speed_);
-  get_parameter("yaw_offset", yaw_offset_);
+  double yaw_offset_rad = 0.0;
+  double yaw_offset_deg = 0.0;
+  get_parameter("yaw_offset", yaw_offset_rad);
+  get_parameter("yaw_offset_deg", yaw_offset_deg);
+  if (hasParameterOverride(options, "yaw_offset_deg")) {
+    yaw_offset_ = yaw_offset_deg * M_PI / 180.0;
+    if (hasParameterOverride(options, "yaw_offset") &&
+      std::abs(yaw_offset_rad - yaw_offset_) > 1.0e-6)
+    {
+      RCLCPP_WARN(
+        get_logger(),
+        "both yaw_offset(rad)=%.6f and yaw_offset_deg=%.3f are set; using yaw_offset_deg",
+        yaw_offset_rad, yaw_offset_deg);
+    }
+  } else {
+    yaw_offset_ = yaw_offset_rad;
+    yaw_offset_deg = yaw_offset_ * 180.0 / M_PI;
+  }
   get_parameter("yaw_kp", yaw_kp_);
   get_parameter("max_v_yaw", max_v_yaw_);
   get_parameter("exit_raise_distance", exit_raise_distance_);
@@ -163,11 +191,12 @@ HolePassController::HolePassController(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(
     get_logger(),
     "HolePassController action='%s' cmd_out='%s' stamped_out='%s' frame='%s' "
-    "robot='%s' global='%s' trajectory='%s' cmd_topic='%s' state_topic='%s' holes=%zu",
+    "robot='%s' global='%s' trajectory='%s' cmd_topic='%s' state_topic='%s' "
+    "yaw_offset=%.2fdeg holes=%zu",
     pass_hole_action_name_.c_str(), output_cmd_vel_topic_.c_str(),
     output_cmd_vel_stamped_topic_.c_str(), cmd_frame_id_.c_str(), robot_frame_.c_str(),
     global_frame_.c_str(), trajectory_topic_.c_str(), hole_pass_cmd_topic_.c_str(),
-    hole_pass_state_topic_.c_str(), holes_.size());
+    hole_pass_state_topic_.c_str(), yaw_offset_deg, holes_.size());
 }
 
 rclcpp_action::GoalResponse HolePassController::handlePassHoleGoal(

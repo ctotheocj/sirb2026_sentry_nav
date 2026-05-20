@@ -164,7 +164,7 @@ hole_pass_controller:
     stop_distance: 0.4
     slow_speed: 0.25
     pass_speed: 0.45
-    yaw_offset: 0.0
+    yaw_offset_deg: 0.0
     yaw_kp: 2.5
     max_v_yaw: 1.8
     exit_raise_distance: 0.2

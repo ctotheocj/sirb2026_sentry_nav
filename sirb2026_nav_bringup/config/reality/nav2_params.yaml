@@ -163,7 +163,7 @@ hole_pass_controller:
     stop_distance: 0.4
     slow_speed: 0.25
     pass_speed: 0.45
-    yaw_offset: 0.0
+    yaw_offset_deg: 0.0
     yaw_kp: 2.5
     max_v_yaw: 1.8
     exit_raise_distance: 0.2
@@ -365,6 +365,14 @@ bt_navigator:
       prepare_distance: 1.5
       alignment_tolerance_deg: 25.0
       trajectory_max_age: 0.3
+      hole_ids: ["hole_1", "hole_2"]
+      holes:
+        hole_1:
+          port_a_polygon: [999.0, 999.0, 999.5, 999.0, 999.5, 999.5, 999.0, 999.5]
+          port_b_polygon: [1000.0, 999.0, 1000.5, 999.0, 1000.5, 999.5, 1000.0, 999.5]
+        hole_2:
+          port_a_polygon: [999.0, 1001.0, 999.5, 1001.0, 999.5, 1001.5, 999.0, 1001.5]
+          port_b_polygon: [1000.0, 1001.0, 1000.5, 1001.0, 1000.5, 1001.5, 1000.0, 1001.5]
     default_nav_to_pose_bt_xml: $(find-pkg-share sirb2026_nav_bringup)/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml
     default_nav_through_poses_bt_xml: $(find-pkg-share sirb2026_nav_bringup)/behavior_trees/navigate_through_poses_w_replanning_and_recovery.xml
     plugin_lib_names:
