@@ -1,0 +1,7 @@
+<class_libraries>
+  <library path="sirb_smoother">
+    <class name="sirb_smoother/SafeGeometricSmoother" type="sirb_smoother::SafeGeometricSmoother" base_class_type="nav2_core::Smoother">
+      <description>Conservative geometric path smoother with costmap collision checking and fallback.</description>
+    </class>
+  </library>
+</class_libraries>

@@ -1,0 +1,10 @@
+<class_libraries>
+  <library path="sirb_nav2_plugins_nodes">
+    <class type="pb_nav2_costmap_2d::IntensityVoxelLayer"     base_class_type="nav2_costmap_2d::Layer">
+      <description>Similar to obstacle costmap, but uses 3D voxel grid to store data.</description>
+    </class>
+    <class type="pb_nav2_costmap_2d::OccupancyGridObstacleLayer"     base_class_type="nav2_costmap_2d::Layer">
+      <description>Marks occupied cells from OccupancyGrid without clearing free cells.</description>
+    </class>
+  </library>
+</class_libraries>

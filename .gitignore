@@ -18,6 +18,7 @@ __pycache__
 *.pcd
 *.gv
 *.pdf
+*.zip
 
-pb2025_nav_bringup/map/reality/*.yaml
-pb2025_nav_bringup/map/reality/*.pgm
+sirb2026_nav_bringup/map/reality/*.yaml
+sirb2026_nav_bringup/map/reality/*.pgm

@@ -1,0 +1,51 @@
+# DodgeManager 闪避管理器参数配置
+# 此文件可独立加载，也可合并到 nav2_params.yaml 中
+
+dodge_manager:
+  ros__parameters:
+    # ============ 功能总开关 ============
+    enable_dodge: False
+
+    # ============ 坐标系 ============
+    # 需要与 nav2 配置保持一致
+    global_frame: "odom"
+    robot_frame: "gimbal_yaw"
+
+    # ============ 控制频率 ============
+    control_frequency: 20.0
+
+    # ============ 闪避区域 ============
+    # 四边形的四个顶点坐标（全局坐标系下，按顺序排列）
+    # 机器人在此区域内才会监听被击打信号
+    dodge_zone:
+      x1: -2.0
+      y1: -2.0
+      x2:  2.0
+      y2: -2.0
+      x3:  2.0
+      y3:  2.0
+      x4: -2.0
+      y4:  2.0
+
+    # ============ 话题配置 ============
+    robot_status_topic: "/referee/robot_status"
+    tracker_target_topic: "/tracker/target"
+    cmd_vel_topic: "cmd_vel"
+    costmap_topic: "local_costmap/costmap_raw"
+    goal_pose_topic: "goal_pose"
+
+    # ============ 机器人参数 ============
+    robot_radius: 0.20        # 圆形机器人半径 (米)
+
+    # ============ 闪避参数 ============
+    dodge_distance: 1.0       # 每次闪避移动距离 (米)
+    dodge_velocity: 1.5       # 闪避线速度 (m/s)
+    dodge_count: 3            # 连续闪避次数
+    safety_margin: 0.15       # 碰撞检测安全余量 (米)
+    direction_samples: 36     # 方向采样数 (360°/36 = 每 10° 一个采样)
+    costmap_check_resolution: 0.05  # 沿方向检查步长 (米)
+    arrive_threshold: 0.15    # 到达判定阈值 (米)
+
+    # ============ 触发值 ============
+    # 被击打判定: is_hp_deduced == true && hp_deduction_reason == 0 (装甲板被弹丸击打)
+    # 目标检测判定: tracker/target 话题 tracking == true 时触发停车

@@ -1,0 +1,57 @@
+<library path="sirb_nav2_plugins_nodes">
+  <class type="sirb_nav2_plugins::EnemyDetectedCondition" base_class_type="BT::ConditionNode">
+    <description>
+      检测是否发现敌人的条件节点,未使用
+    </description>
+  </class>
+  <class type="sirb_nav2_plugins::SelectNearbyGoal" base_class_type="BT::ActionNodeBase">
+    <description>
+      在目标点周围采样并选择空闲点作为新目标
+    </description>
+  </class>
+  <class type="sirb_nav2_plugins::ReplanCondition" base_class_type="BT::ConditionNode">
+    <description>
+      智能重规划条件节点：基于路径偏差、前方碰撞和时间间隔触发全局重规划
+    </description>
+  </class>
+  <class type="sirb_nav2_plugins::PathGate" base_class_type="BT::ActionNodeBase">
+    <description>
+      将候选重规划路径与 FollowPath 使用的稳定跟踪路径解耦。
+    </description>
+  </class>
+  <class type="sirb_nav2_plugins::LocalizationReadyCondition" base_class_type="BT::ActionNodeBase">
+    <description>
+      等待定位诊断进入可信 TRACKING 状态后放行规划控制链。
+    </description>
+  </class>
+  <class type="sirb_nav2_plugins::IsHoleModeActiveCondition" base_class_type="BT::ConditionNode">
+    <description>
+      检查过洞模式是否正在激活，用于抑制普通重规划。
+    </description>
+  </class>
+  <class type="sirb_nav2_plugins::HoleApproachCondition" base_class_type="BT::ConditionNode">
+    <description>
+      基于当前已提交轨迹与洞口 polygon 相交关系判断是否进入过洞任务。
+    </description>
+  </class>
+  <class type="sirb_nav2_plugins::HolePassScope" base_class_type="BT::DecoratorNode">
+    <description>
+      在子树执行期间进入过洞导航模式，并在成功、失败或 halt 时恢复普通模式。
+    </description>
+  </class>
+  <class type="sirb_nav2_plugins::CommitTrajectoryAction" base_class_type="BT::ActionNodeBase">
+    <description>
+      提交最新的候选 MINCO 轨迹，仅在提交成功时更新 FollowPath 跟踪路径。
+    </description>
+  </class>
+  <class type="sirb_nav2_plugins::GenerateMincoCandidateAction" base_class_type="BT::ActionNodeBase">
+    <description>
+      由全局路径异步生成候选 smooth path 与候选 MINCO 轨迹。
+    </description>
+  </class>
+  <class type="sirb_nav2_plugins::PassHoleAction" base_class_type="BT::ActionNodeBase">
+    <description>
+      调用 hole_pass_controller 的 PassHole action 执行连续过洞控制。
+    </description>
+  </class>
+</library>

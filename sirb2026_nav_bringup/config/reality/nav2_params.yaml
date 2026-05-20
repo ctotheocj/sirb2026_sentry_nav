@@ -1,0 +1,934 @@
+livox_ros_driver2:
+  ros__parameters:
+    xfer_format: 4                                      # 0-PointCloud2Msg(PointXYZRTL), 1-LivoxCustomMsg, 2-PclPxyziMsg, 3-LivoxImuMsg, 4-AllMsg
+    multi_topic: 0                                      # 0-All LiDARs share the same topic, 1-One LiDAR one topic
+    data_src: 0                                         # 0-lidar, others-Invalid data src
+    publish_freq: 50.0                                  # frequency of publish, 5.0, 10.0, 20.0, 50.0, etc.
+    output_data_type: 0
+    frame_id: front_mid360
+    user_config_path: $(find-pkg-share sirb2026_nav_bringup)/config/reality/mid360_user_config.json
+    cmdline_input_bd_code: livox0000000001
+    lvx_file_path: ""
+
+point_lio:
+  ros__parameters:
+    use_imu_as_input: False                             # Change to True to use IMU as input of Point-LIO
+    prop_at_freq_of_imu: True
+    check_satu: True
+    batch_update_en: True                               # True: Batch-LIWO; False: original Point-Wise update (Point-LIO)
+    batch_time_interval: 0.001                          # Batch time interval in seconds
+    init_map_size: 10
+    point_filter_num: 3                                 # Options: 4, 3
+    space_down_sample: True
+    filter_size_surf: 0.2                               # Options: 0.5, 0.3, 0.2, 0.15, 0.1
+    filter_size_map: 0.1                                # Options: 0.5, 0.3, 0.15, 0.1
+    ivox_nearby_type: 18                                # Options: 0, 6, 18, 26
+    runtime_pos_log_enable: False                       # Option: True
+
+    common:
+      lid_topic: "livox/lidar"
+      imu_topic: "livox/imu"
+      con_frame: False                                  # True: if you need to combine several LiDAR frames into one
+      con_frame_num: 1                                  # the number of frames combined
+      cut_frame: False                                  # True: if you need to cut one LiDAR frame into several subframes
+      cut_frame_time_interval: 0.05                     # should be integral fraction of 1 / LiDAR frequency
+      time_diff_lidar_to_imu: 0.0                       # Time offset between LiDAR and IMU calibrated by other algorithms, e.g., LI-Init (find in Readme)
+
+    wheel_odom:
+      enable: False                                     # True: enable wheel odometry fusion; False: pure LiDAR-Inertial mode
+      topic: "odometry"                                 # wheel odometry topic
+      vel_cov_scale: 0.1                                # 速度测量噪声协方差缩放（越小越信任轮速）
+      use_angular_vel: False                            # True: 同时融合轮式角速度（全向轮可开启）
+      angular_vel_cov_scale: 0.5                        # 角速度协方差缩放（use_angular_vel=True 时生效）
+      max_vel_threshold: 5.0                            # 线速度超限则丢弃（m/s），用于打滑检测
+      max_angular_vel_threshold: 3.0                    # 角速度超限则丢弃（rad/s）
+      residual_scale: 10.0                              # 动态置信度：残差越大、置信度越低的缩放系数
+      max_cov_scale: 100.0                              # 动态置信度：协方差缩放上限
+      acc_diff_threshold: 3.0                           # 动态置信度：加速度差异阈值（m/s²），超过则认为可能打滑
+      acc_cov_scale: 5.0                                # 动态置信度：打滑时协方差额外缩放
+      extrinsic_T: [ 0.0, 0.0, 0.0 ]                   # 轮系中心相对 IMU 的平移 (m)
+      extrinsic_R: [ 1.0, 0.0, 0.0,
+                     0.0, 1.0, 0.0,
+                     0.0, 0.0, 1.0 ]                   # 轮系坐标系相对 IMU 的旋转
+
+    yaw_rate:
+      enable: True                                      # Fuse external chassis yaw-rate without constraining linear velocity
+      topic: "/serial/v_yaw"                            # std_msgs/Float64, rad/s
+      cov: 0.05                                         # Larger = less trust in external yaw-rate
+      max_abs: 12.0                                     # Reject physically impossible yaw-rate (rad/s)
+      timeout: 0.05                                     # Require timestamp proximity to the LIO update time (s)
+      sign: 1.0                                         # Set to -1.0 if the serial yaw-rate sign is opposite
+      axis_in_imu: [-0.527509, -0.020976, 0.849290]      # Chassis +Z yaw axis expressed in Point-LIO IMU/body frame
+
+    prior_pcd:
+      enable: False
+      # NOTE: `prior_pcd_map_path` will be provided in the launch file
+      # prior_pcd_map_path: ""
+      init_pose: [ 0.0, 0.0, 0.0 ]
+
+    preprocess:
+      lidar_type: 1                                     # 1 for Livox serials LiDAR, 2 for Velodyne LiDAR, 3 for ouster LiDAR
+      scan_line: 4
+      timestamp_unit: 3                                 # the unit of time/t field in the PointCloud2 rostopic: 0-second, 1-milisecond, 2-microsecond, 3-nanosecond.
+      blind: 0.5
+
+    mapping:
+      imu_en: True
+      extrinsic_est_en: False                           # for aggressive motion, set this variable False
+      imu_time_inte: 0.005                              # = 1 / frequency of IMU
+      lidar_time_inte: 0.02
+      satu_acc: 2.5                                     # the saturation value of IMU's acceleration. not related to the units
+      satu_gyro: 20.0                                   # the saturation value of IMU's angular velocity. not related to the units
+      acc_norm: 1.0                                     # 1.0 for g as unit, 9.81 for m/s^2 as unit of the IMU's acceleration
+      lidar_meas_cov: 0.003                              # 0.001
+      acc_cov_output: 500.0
+      gyr_cov_output: 1000.0
+      b_acc_cov: 0.0001
+      b_gyr_cov: 0.0001
+      imu_meas_acc_cov: 0.05
+      imu_meas_omg_cov: 0.03
+      gyr_cov_input: 0.03                                # for IMU as input model
+      acc_cov_input: 0.3                                # for IMU as input model
+      plane_thr: 0.1                                    # 0.05, the threshold for plane criteria, the smaller, the flatter a plane
+      match_s: 81.0
+      ivox_grid_resolution: 0.4
+      gravity: [0.527509, 0.020976, -0.849290]            # gravity to be aligned
+      gravity_init: [0.527509, 0.020976, -0.849290]       # preknown gravity in the first IMU body frame, use when imu_en is False or start from a non-stationary state
+      extrinsic_T: [0.12094, 0.14946, 0.04412]
+      extrinsic_R: [1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0]
+
+    odometry:
+      publish_odometry_without_downsample: True
+
+    publish:
+      path_en: False                                    # False: close the path output
+      scan_publish_en: True                             # False: close all the point cloud output
+      scan_bodyframe_pub_en: False                      # True: output the point cloud scans in IMU-body-frame
+      tf_send_en: False                                 # True: send transform from 'camera_init' to 'aft_mapped'
+
+    pcd_save:
+      pcd_save_en: False
+      interval: -1                                      # how many LiDAR frames saved in each pcd file;
+                                                        # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
+
+loam_interface:
+  ros__parameters:
+    use_sim_time: False
+    state_estimation_topic: "aft_mapped_to_init"
+    registered_scan_topic: "cloud_registered"
+    odom_frame: "odom"
+    base_frame: "base_footprint"
+    lidar_frame: "front_mid360"
+
+motion_profile:
+  ros__parameters:
+    max_speed: 2.2 # 规划期望最高速度，主要驱动 MINCO 参考速度。
+    max_accel: 4.0 # 规划允许最大加速度
+    control_speed_limit: 2.5 # 控制器速度上限
+    control_accel_limit: 3.0 # 控制器最终加速度上限
+    tracking_error_soft: 0.30 # 跟踪误差超过该值后开始降低参考速度
+    tracking_error_hard: 0.60 # 跟踪误差超过该值后进入强降速跟踪
+    localization_jump_speed: 7.0 # 定位瞬时跳变速度阈值，高于该值认为 TF/定位异常
+
+sensor_scan_generation:
+  ros__parameters:
+    use_sim_time: False
+    lidar_frame: "front_mid360"
+    base_frame: "base_footprint"
+    robot_base_frame: "gimbal_yaw"
+    use_initial_lidar_to_base_transform: true
+    flatten_base_pose: true
+    flatten_base_pose_z: true
+    odom_pose_cov_xy: 0.02
+    odom_pose_cov_z: 0.05
+    odom_pose_cov_rp: 0.05
+    odom_pose_cov_yaw: 0.03
+    odom_twist_cov_xy: 0.05
+    odom_twist_cov_z: 0.10
+    odom_twist_cov_rp: 0.10
+    odom_twist_cov_yaw: 0.05
+
+fake_vel_transform:
+  ros__parameters:
+    use_sim_time: False
+    debug_logging: false
+    odom_topic: "odometry"
+    robot_base_frame: "gimbal_yaw"
+    fake_robot_base_frame: "gimbal_yaw_fake"
+    input_cmd_vel_topic: "cmd_vel_selected"
+    input_cmd_vel_stamped_topic: "cmd_vel_selected_stamped"
+    output_cmd_vel_topic: "cmd_vel"
+    odom_frame: "odom"
+    prefer_stamped_cmd_vel: true
+    allow_latest_tf_fallback: true
+    tf_lookup_timeout_sec: 0.01
+    stamped_cmd_timeout_sec: 0.12
+    cmd_spin_topic: "cmd_spin"
+    init_spin_speed: 3.14
+    use_nav_yaw: true
+
+hole_pass_controller:
+  ros__parameters:
+    use_sim_time: False
+    global_frame: "map"
+    robot_frame: "gimbal_yaw_fake"
+    output_cmd_vel_topic: "cmd_vel_hole_controller"
+    output_cmd_vel_stamped_topic: "cmd_vel_hole_controller_stamped"
+    cmd_frame_id: "gimbal_yaw_fake"
+    trajectory_topic: "trajectory_manager/trajectory_for_mpc"
+    hole_pass_cmd_topic: "mpc/hole_pass_cmd"
+    hole_pass_state_topic: "serial/hole_pass_state"
+    nav_yaw_topic: "/Nav_yaw"
+    yaw_target_marker_topic: "hole_pass/yaw_target_marker"
+    pass_hole_action_name: "pass_hole"
+    # Geometry is owned by bt_navigator.hole_pass to avoid duplicated hole definitions.
+    # Do not set an empty hole_ids list here: ROS 2 composable parameter loading
+    # cannot infer the type of an empty array.
+    prepare_distance: 1.5
+    stop_distance: 0.4
+    slow_speed: 0.25
+    pass_speed: 0.45
+    yaw_offset: 0.0
+    yaw_kp: 2.5
+    max_v_yaw: 1.8
+    exit_raise_distance: 0.2
+    exit_timeout_sec: 3.0
+    lowering_timeout_sec: 2.0
+    height_state_timeout_sec: 0.3
+    nav_yaw_timeout_sec: 0.2
+    trajectory_timeout_sec: 0.5
+    tf_lookup_timeout_sec: 0.05
+    min_pass_time_sec: 0.4
+    min_pass_distance: 0.3
+    command_publish_period_sec: 0.02
+    command_hold_timeout_sec: 0.3
+    allow_reverse_tangent: false
+    stop_angular_while_waiting: true
+    yaw_marker_length: 0.7
+    yaw_marker_z: 0.25
+
+cmd_vel_mux:
+  ros__parameters:
+    use_sim_time: False
+    debug_logging: false
+    nav_topic: "cmd_vel_nav2_result"
+    hole_topic: "cmd_vel_hole_controller"
+    output_topic: "cmd_vel_selected"
+    output_stamped_topic: "cmd_vel_selected_stamped"
+    output_frame_id: "gimbal_yaw_fake"
+    nav_timeout: 0.5
+    hole_timeout: 0.3
+    nav_priority: 10
+    hole_priority: 20
+    publish_period: 0.02
+    publish_zero_when_idle: false
+    require_hole_mode: true
+    hole_mode_topic: "navigation_mode_manager/hole_mode_active"
+
+navigation_mode_manager:
+  ros__parameters:
+    use_sim_time: False
+    semantic_layer_services: "global_costmap/occupancy_grid_layer/set_semantic_layer_mode;local_costmap/occupancy_grid_layer/set_semantic_layer_mode"
+    legacy_layer_services: "global_costmap/occupancy_grid_layer/set_enabled;local_costmap/occupancy_grid_layer/set_enabled"
+    trajectory_policy_service: "trajectory_manager/set_hole_collision_policy"
+    global_costmap_node: "global_costmap/global_costmap"
+    local_costmap_node: "local_costmap/local_costmap"
+    normal_global_inflation_radius: 0.55
+    normal_local_inflation_radius: 0.8
+    hole_global_inflation_radius: 0.10
+    hole_local_inflation_radius: 0.10
+    service_timeout_sec: 0.5
+    watchdog_timeout_sec: 8.0
+    use_inflation_radius_switch: true
+    use_semantic_layer_mode: true
+    use_trajectory_policy_switch: true
+
+ndt_omp_relocalization:
+  ros__parameters:
+    use_sim_time: False
+    num_threads: 4
+    ndt_resolution: 1.0
+    ndt_step_size: 0.1
+    ndt_epsilon: 0.01
+    ndt_max_iterations: 30
+    ndt_search_method: 1             # 0:KDTREE 1:DIRECT7 2:DIRECT1 3:DIRECT26
+    fitness_score_threshold: 1.0
+    registration_period_ms: 300
+    global_leaf_size: 0.15
+    registered_leaf_size: 0.10
+    min_source_points: 1000
+    min_filtered_points: 120
+    max_scan_age_sec: 0.5
+    map_frame: "map"
+    odom_frame: "odom"
+    base_frame: "base_footprint"
+    robot_base_frame: "gimbal_yaw"
+    init_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # [x, y, z, roll, pitch, yaw]
+    # The prior_pcd_file does not need to be specified since it going to be set by defaults in launch.
+    # prior_pcd_file: ""
+    enable_roll_pitch_fix: true
+    trust_ndt_threshold: 5           # consecutive converged frames before trusting NDT
+    jump_threshold_xy: 1.0           # (m) jump threshold in xy
+    jump_threshold_yaw: 0.6          # (rad) jump threshold in yaw
+    jump_threshold_rp: 0.2           # (rad) jump threshold in roll/pitch
+    enable_quality_gate: true
+    quality_sample_points: 1500
+    quality_max_corr_dist: 1.0
+    quality_min_valid_correspondences: 120
+    quality_min_overlap_ratio: 0.35
+    quality_max_median_residual: 0.35
+    quality_max_p90_residual: 1.0
+    publish_tf_only_when_trusted: false
+    freeze_tf_when_not_trusted: true
+    
+pointcloud_to_laserscan:
+  ros__parameters:
+    use_sim_time: False
+    target_frame: base_footprint
+    min_height: -0.5
+    max_height: 6.0
+    min_intensity: 0.1
+    max_intensity: 2.0
+    angle_min: -3.1415926                   # -M_PI/2
+    angle_max: 3.1415926                    # M_PI/2
+    angle_increment: 0.00872665             # M_PI/360.0
+    scan_time: 0.05
+    range_min: 0.3
+    range_max: 10.0
+    use_inf: true
+    scan_qos_reliability: reliable
+    qos_overrides:
+      obstacle_scan:
+        publisher:
+          reliability: reliable
+
+slam_toolbox:
+  ros__parameters:
+    # https://github.com/SteveMacenski/slam_toolbox/tree/humble?#configuration
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_loss_function: None
+
+    odom_frame: odom
+    map_frame: map
+    base_frame: base_footprint
+    scan_topic: obstacle_scan
+    use_map_saver: true
+    mode: mapping
+
+    # if you'd like to immediately start continuing a map at a given pose
+    # or at the dock, but they are mutually exclusive, if pose is given
+    # will use pose
+    # map_file_name: test_steve
+    # map_start_pose: [0.0, 0.0, 0.0]
+    # map_start_at_dock: true
+
+    debug_logging: false
+    throttle_scans: 1
+    scan_queue_size: 10
+    transform_publish_period: 0.0                # if 0 never publishes odometry
+    map_update_interval: 0.5
+    resolution: 0.05
+    min_laser_range: 0.3                         # for rastering images
+    max_laser_range: 10.0                         # for rastering images
+    minimum_time_interval: 0.2
+    transform_timeout: 0.2
+    tf_buffer_duration: 10.
+    stack_size_to_use: 40000000                   # program needs a larger stack size to serialize large maps
+    enable_interactive_mode: true
+
+    # General Parameters
+    use_scan_matching: false
+    use_scan_barycenter: true
+    minimum_travel_distance: 0.1
+    minimum_travel_heading: 0.1
+    scan_buffer_size: 10
+    scan_buffer_maximum_scan_distance: 10.0
+    link_match_minimum_response_fine: 0.1
+    link_scan_maximum_distance: 1.5
+    loop_search_maximum_distance: 3.0
+    do_loop_closing: false
+    loop_match_minimum_chain_size: 10
+    loop_match_maximum_variance_coarse: 3.0
+    loop_match_minimum_response_coarse: 0.35
+    loop_match_minimum_response_fine: 0.45
+
+    # Correlation Parameters - Correlation Parameters
+    correlation_search_space_dimension: 0.5
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.1
+
+    # Correlation Parameters - Loop Closure Parameters
+    loop_search_space_dimension: 8.0
+    loop_search_space_resolution: 0.05
+    loop_search_space_smear_deviation: 0.03
+
+    # Scan Matcher Parameters
+    distance_variance_penalty: 5.5
+    angle_variance_penalty: 5.0
+
+    fine_search_angle_offset: 0.00349
+    coarse_search_angle_offset: 0.349
+    coarse_angle_resolution: 0.0349
+    minimum_angle_penalty: 0.9
+    minimum_distance_penalty: 0.5
+    use_response_expansion: true
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: False
+    global_frame: map
+    robot_base_frame: gimbal_yaw_fake
+    odom_topic: odometry
+    bt_loop_duration: 10
+    default_server_timeout: 1000
+    wait_for_service_timeout: 1000
+    hole_pass:
+      prepare_distance: 1.5
+      alignment_tolerance_deg: 25.0
+      trajectory_max_age: 0.3
+    default_nav_to_pose_bt_xml: $(find-pkg-share sirb2026_nav_bringup)/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml
+    default_nav_through_poses_bt_xml: $(find-pkg-share sirb2026_nav_bringup)/behavior_trees/navigate_through_poses_w_replanning_and_recovery.xml
+    plugin_lib_names:
+      - nav2_compute_path_to_pose_action_bt_node
+      - nav2_compute_path_through_poses_action_bt_node
+      - nav2_smooth_path_action_bt_node
+      - nav2_follow_path_action_bt_node
+      - nav2_spin_action_bt_node
+      - nav2_wait_action_bt_node
+      - nav2_assisted_teleop_action_bt_node
+      - nav2_back_up_action_bt_node
+      - nav2_drive_on_heading_bt_node
+      - nav2_clear_costmap_service_bt_node
+      - nav2_is_stuck_condition_bt_node
+      - nav2_goal_reached_condition_bt_node
+      - nav2_goal_updated_condition_bt_node
+      - nav2_globally_updated_goal_condition_bt_node
+      - nav2_is_path_valid_condition_bt_node
+      - nav2_initial_pose_received_condition_bt_node
+      - nav2_reinitialize_global_localization_service_bt_node
+      - nav2_rate_controller_bt_node
+      - nav2_distance_controller_bt_node
+      - nav2_speed_controller_bt_node
+      - nav2_truncate_path_action_bt_node
+      - nav2_truncate_path_local_action_bt_node
+      - nav2_goal_updater_node_bt_node
+      - nav2_recovery_node_bt_node
+      - nav2_pipeline_sequence_bt_node
+      - nav2_round_robin_node_bt_node
+      - nav2_transform_available_condition_bt_node
+      - nav2_time_expired_condition_bt_node
+      - nav2_path_expiring_timer_condition
+      - nav2_distance_traveled_condition_bt_node
+      - nav2_single_trigger_bt_node
+      - nav2_goal_updated_controller_bt_node
+      - nav2_is_battery_low_condition_bt_node
+      - nav2_navigate_through_poses_action_bt_node
+      - nav2_navigate_to_pose_action_bt_node
+      - nav2_remove_passed_goals_action_bt_node
+      - nav2_planner_selector_bt_node
+      - nav2_controller_selector_bt_node
+      - nav2_goal_checker_selector_bt_node
+      - nav2_controller_cancel_bt_node
+      - nav2_path_longer_on_approach_bt_node
+      - nav2_wait_cancel_bt_node
+      - nav2_spin_cancel_bt_node
+      - nav2_back_up_cancel_bt_node
+      - nav2_assisted_teleop_cancel_bt_node
+      - nav2_drive_on_heading_cancel_bt_node
+      - nav2_is_battery_charging_condition_bt_node
+      - sirb_nav2_plugins_nodes
+
+controller_server:
+  ros__parameters:
+    odom_topic: odometry
+    controller_frequency: 40.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.001
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    progress_checker_plugins: ["progress_checker"]
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.3
+      movement_time_allowance: 5.0
+    general_goal_checker:
+      stateful: True
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.12
+      yaw_goal_tolerance: 6.28  # 不支持旋转
+    FollowPath:
+      plugin: "<controller_plugin>"
+      debug_logging: false
+      # MPC controller params
+      use_odometry_state: true
+      odom_topic: "odometry"
+      max_odom_age_sec: 0.80
+      max_odom_predict_dt: 0.10
+      minco_timeout_sec: 0.50
+      minco_goal_reset_tolerance: 0.5
+      reset_warm_start_on_goal_change_only: true
+      allow_path_fallback_without_minco: true
+      minco_unavailable_failure_sec: 0.8
+      prevent_tracking_reverse: true
+      reverse_guard_min_ref_speed: 0.05
+      reverse_guard_allowance: 0.03
+      collision_stop_failure_sec: 0.8
+      minco_traj_topic: "trajectory_manager/trajectory_for_mpc"
+      QX: 60.0      #10~100，下同
+      QY: 60.0
+      R: 0.5        #0～1
+      S: 1.0
+      Qv: 2.0
+      horizon: 40
+      control_frequency: 40.0
+      local_plan_publish_period_sec: 0.10
+      v_ref_max: 2.5
+      k_curvature: 4.0
+      terminal_weight: 2.0
+      terminal_horizon: 2
+      ax_max: 3.0
+      ay_max: 3.0
+      v_circle_max: 2.5
+      goal_stop_distance: 0.15
+      brake_safety_factor: 0.8
+      pose_jump_speed_threshold: 7.0
+      cmd_lookahead_sec: 0.04
+      minco_projection_search_ahead_sec: 0.30
+      minco_projection_max_advance_sec: 0.12
+      minco_projection_max_lag_sec: 0.80
+      enable_lateral_error_ref_scaling: true
+      lateral_error_slow_threshold: 0.30
+      lateral_error_high_threshold: 0.60
+      min_lateral_ref_time_scale: 0.60
+      enable_pose_jump_damping: true
+      pose_jump_distance_threshold: 0.25
+      pose_jump_damping_scale: 0.35
+      pose_jump_damping_frames: 6
+      reject_angle_deg: 180.0
+      reject_dist_threshold: 2.0 # 距离终点阈值
+      max_consecutive_rejects: 5
+      preserve_warm_start_on_similar_plan: true
+      similar_plan_goal_tolerance: 0.5
+      similar_plan_anchor_tolerance: 0.5
+      similar_plan_forward_distance: 1.5
+      similar_plan_max_deviation: 0.4
+      fallback_sample_speed: 0.8
+      enable_goal_slowdown: True
+      goal_slowdown_distance: 1.5
+      enable_dynamic_obstacle_avoidance: true
+      dynamic_obstacle_topic: "dynamic_obstacles"
+      dynamic_safety_margin: 0.3
+      max_dynamic_obstacles: 5
+      robot_radius: 0.2     # 物理机器人半径 (m)，用于 MPC 动态障碍推离计算。
+
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: False
+      update_frequency: 5.0
+      publish_frequency: 10.0
+      global_frame: odom
+      robot_base_frame: gimbal_yaw_fake
+      rolling_window: true
+      width: 5
+      height: 5
+      resolution: 0.05
+      robot_radius: 0.2
+      track_unknown_space: true
+      plugins: ["static_layer", "occupancy_grid_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+      occupancy_grid_layer:
+        plugin: pb_nav2_costmap_2d::OccupancyGridObstacleLayer
+        enabled: true
+        topic: <robot_namespace>/occupancy_grid
+        occupied_threshold: 65
+        obstacle_keep_time: 0.35
+        stamp_source_cell_area: true
+        debug_logging: false
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 4.0
+        inflation_radius: 0.8
+      always_send_full_costmap: True
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: False
+      update_frequency: 10.0
+      publish_frequency: 10.0
+      global_frame: map
+      robot_base_frame: gimbal_yaw_fake
+      robot_radius: 0.2
+      resolution: 0.05
+      track_unknown_space: false
+      transform_tolerance: 0.2
+      plugins: ["static_layer", "occupancy_grid_layer", "inflation_layer"]
+      occupancy_grid_layer:
+        plugin: pb_nav2_costmap_2d::OccupancyGridObstacleLayer
+        enabled: true
+        topic: <robot_namespace>/occupancy_grid
+        occupied_threshold: 65
+        obstacle_keep_time: 0.35
+        stamp_source_cell_area: true
+        debug_logging: false
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_topic: <robot_namespace>/map
+        map_subscribe_transient_local: True
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.5
+        inflation_radius: 0.55
+      always_send_full_costmap: True
+
+map_server:
+  ros__parameters:
+    yaml_filename: ""
+
+map_saver:
+  ros__parameters:
+    use_sim_time: False
+    save_map_timeout: 5.0
+    free_thresh_default: 0.25
+    occupied_thresh_default: 0.65
+    map_subscribe_transient_local: True
+
+planner_server:
+  ros__parameters:
+    use_sim_time: False
+    expected_planner_frequency: 10.0
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_theta_star_planner/ThetaStarPlanner"
+      how_many_corners: 8
+      w_euc_cost: 1.0
+      w_traversal_cost: 10.0
+      w_heuristic_cost: 1.0
+
+dynamic_obstacle_tracker:
+  ros__parameters:
+    use_sim_time: False
+    input_topic: dynamic_points
+    output_topic: dynamic_obstacles
+    viz_topic: vis/tracked_obstacles
+    cluster_tolerance: 0.4
+    cluster_min_size: 3
+    cluster_max_size: 500
+    match_dist_max: 2.0
+    vel_alpha: 0.4
+    max_missed_frames: 5
+    confirm_frames: 2
+    prediction_steps: 20
+    prediction_dt: 0.1
+    max_output_obstacles: 7
+
+smoother_server:
+  ros__parameters:
+    use_sim_time: False
+    smoother_plugins: ["safe_geometric_smoother"]
+    safe_geometric_smoother:
+      plugin: "sirb_smoother/SafeGeometricSmoother"
+      enabled: true
+      fallback_to_input_path: false
+      use_minco: true
+      use_footprint_collision_check: false
+      allow_unknown: true
+      # ESDF (requires plan_env grid_map_node running)
+      minco_use_esdf: true
+      minco_esdf_safe_distance: 0.25
+      minco_esdf_influence_distance: 0.8
+      minco_esdf_query_z: 0.3
+      # Kinematics
+      minco_v_ref: 2.2
+      minco_v_max: 2.5
+      minco_a_max: 4.0
+      minco_w_velocity: 1.0
+      minco_w_acceleration: 0.5
+      minco_dynamics_sample_dt: 0.08
+      minco_dynamic_realloc_max_segment_scale: 8.0
+      minco_min_segment_time: 0.15
+      minco_max_segment_time: 4.0
+      minco_max_pieces: 60
+      # Three-stage pipeline
+      minco_phase0_enabled: true
+      minco_phase0_max_iterations: 15
+      minco_phase0_w_energy: 1.0
+      minco_phase0_w_reference: 10.0
+      minco_phase0_w_obstacle: 0.1
+      minco_pre_max_iterations: 30
+      minco_pre_w_energy: 0.5
+      minco_pre_w_reference: 20.0
+      minco_pre_w_obstacle: 1.0
+      minco_fine_max_iterations: 60
+      minco_fine_w_energy: 3.0       # higher for omnidirectional (no curvature constraint)
+      minco_fine_w_reference: 5.0
+      minco_fine_w_obstacle: 2.0
+      minco_wei_time: 15.0
+      # Time allocation
+      minco_use_trapezoidal_time: true
+      minco_trapezoidal_k_angle: 0.3
+      minco_w_time_ratio: 5.0
+      minco_time_ratio_upper: 1.3
+      minco_time_ratio_lower: 0.7
+      # Trajectory stitching
+      enable_trajectory_stitching: false
+      retain_duration: 0.3
+      stitch_max_distance: 0.5
+      reuse_cached_trajectory_on_minco_failure: false
+      allow_reference_fallback_on_bad_geometry: true
+      # MPC output
+      publish_trajectory_for_mpc: false
+      dynamic_obstacle_enabled: false
+      dynamic_obstacle_topic: dynamic_obstacles
+      debug_publish: true
+
+trajectory_manager:
+  ros__parameters:
+    use_sim_time: False
+    input_topic: "safe_geometric_smoother/legacy_trajectory_for_mpc"
+    output_topic: "trajectory_manager/trajectory_for_mpc"
+    odom_topic: "odometry"
+    costmap_topic: "global_costmap/costmap_raw"
+    publish_rate_hz: 20.0
+    active_timeout_sec: 6.0
+    min_remaining_time_sec: 0.15
+    crop_epsilon_sec: 0.02
+    projection_search_window_sec: 0.8
+    projection_max_tracking_error: 0.8
+    candidate_projection_window_sec: 0.35
+    publish_full_active_trajectory: true
+    enable_forward_collision_check: true
+    allow_unknown_costmap: false
+    collision_cost_threshold: 253
+    collision_check_horizon_sec: 1.00
+    collision_check_step_sec: 0.10
+    collision_check_radius: 0.20
+    emergency_stop_remaining_time_sec: 0.10
+    emergency_stop_duration_sec: 0.20
+    switch_goal_change_distance: 0.5
+    switch_max_position_error: 0.45
+    switch_max_velocity_error: 2.5
+    switch_max_acceleration_error: 4.0
+    switch_min_direction_dot: -0.2
+    switch_min_candidate_duration_sec: 0.2
+    switch_min_interval_sec: 1.0
+    switch_immediate_deviation: 1.2
+    switch_immediate_length_ratio: 0.25
+    switch_allow_when_remaining_sec: 1.0
+    tracking_error_replan_frames: 3
+    require_odom: true
+
+behavior_server:
+  ros__parameters:
+    use_sim_time: False
+    local_costmap_topic: local_costmap/costmap_raw
+    global_costmap_topic: global_costmap/costmap_raw
+    local_footprint_topic: local_costmap/published_footprint
+    global_footprint_topic: global_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "assisted_teleop", "wait"]
+    spin:
+      plugin: "nav2_behaviors/Spin"
+    backup:
+      plugin: "pb_nav2_behaviors/BackUpFreeSpace"
+      robot_radius: 0.3
+      allow_escape_from_collision: true
+      escape_collision_max_distance: 0.45
+    drive_on_heading:
+      plugin: "nav2_behaviors/DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors/Wait"
+    assisted_teleop:
+      plugin: "nav2_behaviors/AssistedTeleop"
+    local_frame: odom
+    global_frame: map
+    robot_base_frame: gimbal_yaw_fake
+    transform_tolerance: 0.1
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
+    # params for pb_nav2_behaviors/BackUpFreeSpace
+    service_name: "global_costmap/get_costmap"
+    max_radius: 2.0
+    visualize: True
+
+waypoint_follower:
+  ros__parameters:
+    use_sim_time: False
+    loop_rate: 20
+    stop_on_failure: false
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: True
+      waypoint_pause_duration: 200
+
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: False
+    smoothing_frequency: 40.0
+    scale_velocities: False
+    feedback: "OPEN_LOOP"
+    max_velocity: [2.5, 2.5, 3.0]
+    min_velocity: [-2.5, -2.5, -3.0]
+    max_accel: [3.0, 3.0, 5.0]
+    max_decel: [-3.0, -3.0, -5.0]
+    odom_topic: "odometry"
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 0.2
+
+pb_teleop_twist_joy_node:
+  ros__parameters:
+    use_sim_time: False
+    robot_base_frame: gimbal_yaw
+    control_mode: auto_control    # Option: auto_control, manual_control
+
+    require_enable_button: true
+    enable_button: 4              # L1 shoulder button
+    enable_turbo_button: 5        # R1 shoulder button
+
+    axis_chassis:
+      x: 1                        # Left thumb stick vertical
+      y: 0                        # Left thumb stick horizontal
+      yaw: 6                      # button_left and button_right
+    scale_chassis:
+      x: 2.5
+      y: 2.5
+      yaw: 3.0
+    scale_chassis_turbo:
+      x: 4.0
+      y: 4.0
+      yaw: 6.0
+
+    axis_gimbal:
+      roll: -1                    # Disable
+      pitch: 4                    # Right thumb stick vertical
+      yaw: 3                      # Right thumb stick horizontal
+    scale_gimbal:
+      roll: 0.0
+      pitch: -1.0
+      yaw: 2.5
+    scale_gimbal_turbo:
+      roll: 0.0
+      pitch: -1.5
+      yaw: 3.5
+
+yaw_fusion:
+  ros__parameters:
+    odom_topic: "odometry"        
+    max_predict_dt: 0.15          # 最大前向预测窗口 (s)，防止 odom 丢失时积分漂移
+    yaw_rate:
+      enable: True
+      topic: "/serial/v_yaw"
+      sign: 1.0
+      max_abs: 12.0
+      timeout: 0.05
+
+dodge_manager:
+  ros__parameters:
+    enable_dodge: False             # 总开关；True 才响应被击打事件
+    global_frame: "odom"
+    robot_frame: "gimbal_yaw"
+    control_frequency: 20.0
+    # 闪避触发区域（全局坐标系，比赛区域内）
+    dodge_zone:
+      x1: -14.0
+      y1:  -7.5
+      x2:  14.0
+      y2:  -7.5
+      x3:  14.0
+      y3:   7.5
+      x4: -14.0
+      y4:   7.5
+    robot_status_topic: "/referee/robot_status"
+    tracker_target_topic: "/tracker/target"
+    cmd_vel_topic: "cmd_vel"
+    costmap_topic: "local_costmap/costmap_raw"
+    goal_pose_topic: "goal_pose"
+    robot_radius: 0.20
+    dodge_distance: 1.0
+    dodge_velocity: 1.5
+    dodge_count: 3
+    safety_margin: 0.15
+    direction_samples: 36
+    costmap_check_resolution: 0.05
+    arrive_threshold: 0.15
+
+lidar_preprocessor:
+  ros__parameters:
+    use_sim_time: False
+    pointcloud_topic: "registered_scan"
+    output_topic: "obstacle_cloud"
+    voxel_leaf_size: 0.08
+    ground_cell_size: 0.4
+    ground_low_percentile: 0.05
+    cell_min_points: 5
+    obstacle_min_height: 0.15
+    obstacle_max_height: 1.80
+    visualization_min_height: -0.20
+    visualization_max_height: 1.80
+    enable_normal_check: true
+    normal_min_neighbors: 5
+    ground_normal_cos_thresh: 0.966
+    slope_tolerance_height: 0.15
+
+dynamic_point_detector:
+  ros__parameters:
+    use_sim_time: False
+    pointcloud_topic: "registered_scan"
+    odometry_topic: "odometry"
+    output_topic: "dynamic_points"
+    frame_topic: "m_detector/frame_out"
+    static_points_topic: "m_detector/std_points"
+
+grid_map_node:
+  ros__parameters:
+    use_sim_time: False
+    map:
+      resolution: 0.10
+      obstacles_inflation: 0.2
+      obstacles_inflation_xy: 0.2
+      obstacles_inflation_z: 0.0
+      frame_id: "map"
+      local_map_margin: 10
+      virtual_ceil_height: -1.0
+      ground_height: 0.0
+      origin: [-14.0, -8.0, -0.5]
+      size: [28.0, 16.0, 2.0]
+      prob_hit_log: 0.70
+      prob_miss_log: -0.40
+      clamp_min_log: -2.0
+      clamp_max_log: 3.5
+      min_occupancy_log: 0.0
+      min_ray_length: 0.1
+      max_ray_length: 10.0
+      pub_z_slice: 0.3
+      occupancy_grid_project_all_z: true
+      occupancy_grid_min_z: 0.05
+      occupancy_grid_max_z: 1.20
+      occupancy_grid_hold_enabled: true
+      occupancy_grid_hold_time: 0.6
+      occupancy_grid_debug: false
+      occupancy_grid_publish_period_ms: 100
+      esdf_update_period_ms: 50
+      cloud_stale_timeout_sec: 0.5
+      cloud_topic: "obstacle_cloud"
+      odom_topic: "odometry"
+      transform_timeout_sec: 0.05
+      voxel_decay_time: 5.0
+      enable_esdf: true
+      enable_negative_esdf: true

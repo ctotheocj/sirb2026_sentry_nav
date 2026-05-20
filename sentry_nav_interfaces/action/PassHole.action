@@ -1,0 +1,15 @@
+string hole_id
+string entry_port
+geometry_msgs/PoseStamped entry_pose
+geometry_msgs/PoseStamped exit_pose
+geometry_msgs/PolygonStamped corridor
+float32 timeout_sec
+---
+bool success
+string reason
+string final_stage
+---
+uint8 stage
+string stage_name
+float32 distance_to_entry
+float32 traveled_distance

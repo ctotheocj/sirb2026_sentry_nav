@@ -1,0 +1,9 @@
+<class_libraries>
+    <library path="f_mpc_controller">
+        <class type="f_mpc_controller::MpcController" base_class_type="nav2_core::Controller">
+            <description>
+                f_mpc_controller
+            </description>
+        </class>
+    </library>
+</class_libraries>

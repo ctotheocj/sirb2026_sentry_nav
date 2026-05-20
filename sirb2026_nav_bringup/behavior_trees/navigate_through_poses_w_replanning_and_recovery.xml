@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="3"
+      main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode name="NavigateRecovery"
+                  number_of_retries="8">
+      <PipelineSequence name="NavigateWithReplanning">
+        <Fallback name="ConditionalReplanGate">
+          <IsHoleModeActive/>
+          <RateController hz="1.0">
+            <RecoveryNode name="ComputePathThroughPoses"
+                          number_of_retries="3">
+              <RetryUntilSuccessful num_attempts="2">
+                <ReactiveSequence>
+                  <RemovePassedGoals input_goals="{goals}"
+                                     output_goals="{goals}"
+                                     radius="0.7"/>
+                  <ComputePathThroughPoses server_timeout="1000" goals="{goals}"
+                                           path="{candidate_path}"
+                                           planner_id="GridBased"/>
+                  <GenerateMincoCandidate server_timeout="1000" input_path="{candidate_path}"
+                                          smoothed_path="{candidate_smooth_path}"
+                                          candidate_minco="{candidate_minco}"
+                                          smoother_id="safe_geometric_smoother"
+                                          server_name="safe_geometric_smoother/generate_minco_candidate"
+                                          max_smoothing_duration="0.2"/>
+                  <CommitTrajectory server_timeout="1000" candidate_path="{candidate_smooth_path}"
+                                    candidate_minco="{candidate_minco}"
+                                    tracking_path="{tracking_path}"
+                                    server_name="trajectory_manager/commit_trajectory"
+                                    allow_keep_active_on_reject="true"/>
+                </ReactiveSequence>
+              </RetryUntilSuccessful>
+              <ReactiveFallback name="ThroughPosesPlanFailureRecovery">
+                <GoalUpdated/>
+                <RoundRobin name="ThroughPosesPlanRecoveryActions">
+                  <BackUp backup_dist="0.35"
+                          backup_speed="0.35"/>
+                  <Wait wait_duration="0.5"/>
+                </RoundRobin>
+              </ReactiveFallback>
+            </RecoveryNode>
+          </RateController>
+        </Fallback>
+
+        <RecoveryNode name="FollowPathRecovery"
+                      number_of_retries="3">
+          <Fallback name="HoleOrNormal">
+            <Sequence name="HolePassTask">
+                <HoleApproachCondition trajectory_topic="trajectory_manager/trajectory_for_mpc"
+                                     global_frame="map"
+                                     robot_frame="gimbal_yaw_fake"
+                                     param_prefix="hole_pass"
+                                     prepare_distance="1.5"
+                                     alignment_tolerance_deg="25.0"
+                                     trajectory_max_age="0.3"
+                                     hole_id="{hole_id}"
+                                     entry_port="{entry_port}"
+                                     entry_pose="{hole_entry_pose}"
+                                     exit_pose="{hole_exit_pose}"
+                                     hole_exit_goal="{hole_exit_goal}"
+                                       corridor_polygon="{hole_corridor}"/>
+                <HolePassScope hole_id="{hole_id}"
+                             corridor="{hole_corridor}"
+                             mode_service="navigation_mode_manager/set_navigation_mode"
+                             watchdog_timeout_sec="8.0">
+                <Sequence name="PlanCommitAndPassHole">
+                  <ComputePathToPose server_timeout="1000" goal="{hole_exit_goal}"
+                                     path="{candidate_path}"
+                                     planner_id="GridBased"/>
+                  <GenerateMincoCandidate server_timeout="1000" input_path="{candidate_path}"
+                                          smoothed_path="{candidate_smooth_path}"
+                                          candidate_minco="{candidate_minco}"
+                                          smoother_id="safe_geometric_smoother"
+                                          server_name="safe_geometric_smoother/generate_minco_candidate"
+                                          max_smoothing_duration="0.2"/>
+                  <CommitTrajectory server_timeout="1000" candidate_path="{candidate_smooth_path}"
+                                    candidate_minco="{candidate_minco}"
+                                    tracking_path="{tracking_path}"
+                                    server_name="trajectory_manager/commit_trajectory"
+                                    allow_keep_active_on_reject="false"/>
+                  <PassHole hole_id="{hole_id}"
+                            entry_port="{entry_port}"
+                            entry_pose="{hole_entry_pose}"
+                            exit_pose="{hole_exit_pose}"
+                            corridor="{hole_corridor}"
+                            server_name="pass_hole"
+                            timeout_sec="8.0"/>
+                </Sequence>
+                </HolePassScope>
+                <RecoveryNode name="ReplanAfterHole" number_of_retries="2">
+                <Sequence name="ReplanThroughRemainingGoals">
+                  <RemovePassedGoals input_goals="{goals}"
+                                     output_goals="{goals}"
+                                     radius="0.7"/>
+                  <ComputePathThroughPoses server_timeout="1000" goals="{goals}"
+                                           path="{candidate_path}"
+                                           planner_id="GridBased"/>
+                  <GenerateMincoCandidate server_timeout="1000" input_path="{candidate_path}"
+                                          smoothed_path="{candidate_smooth_path}"
+                                          candidate_minco="{candidate_minco}"
+                                          smoother_id="safe_geometric_smoother"
+                                          server_name="safe_geometric_smoother/generate_minco_candidate"
+                                          max_smoothing_duration="0.2"/>
+                  <CommitTrajectory server_timeout="1000" candidate_path="{candidate_smooth_path}"
+                                    candidate_minco="{candidate_minco}"
+                                    tracking_path="{tracking_path}"
+                                    server_name="trajectory_manager/commit_trajectory"
+                                    allow_keep_active_on_reject="false"/>
+                </Sequence>
+                <BackUp backup_dist="0.3"
+                        backup_speed="0.25"/>
+                </RecoveryNode>
+            </Sequence>
+            <FollowPath path="{tracking_path}"
+                        controller_id="FollowPath"/>
+          </Fallback>
+          <BackUp backup_dist="0.35"
+                  backup_speed="0.35"/>
+        </RecoveryNode>
+      </PipelineSequence>
+
+      <ReactiveFallback name="RecoveryFallback">
+        <GoalUpdated/>
+        <RoundRobin name="RecoveryActions">
+          <BackUp backup_dist="0.35"
+                  backup_speed="0.35"/>
+
+          <Sequence name="ClearGlobalAndReplan">
+            <ClearEntireCostmap name="ClearGlobalCostmap-Recovery"
+                                service_name="global_costmap/clear_entirely_global_costmap"/>
+            <Wait wait_duration="0.20"/>
+            <RemovePassedGoals input_goals="{goals}"
+                               output_goals="{goals}"
+                               radius="0.7"/>
+            <ComputePathThroughPoses server_timeout="1000" goals="{goals}"
+                                     path="{candidate_path}"
+                                     planner_id="GridBased"/>
+            <GenerateMincoCandidate server_timeout="1000" input_path="{candidate_path}"
+                                    smoothed_path="{candidate_smooth_path}"
+                                    candidate_minco="{candidate_minco}"
+                                    smoother_id="safe_geometric_smoother"
+                                    server_name="safe_geometric_smoother/generate_minco_candidate"
+                                    max_smoothing_duration="0.2"/>
+            <CommitTrajectory server_timeout="1000" candidate_path="{candidate_smooth_path}"
+                              candidate_minco="{candidate_minco}"
+                              tracking_path="{tracking_path}"
+                              server_name="trajectory_manager/commit_trajectory"
+                              allow_keep_active_on_reject="false"/>
+          </Sequence>
+
+          <Sequence name="ClearBothAndReplan">
+            <ClearEntireCostmap name="ClearLocalCostmap-Recovery"
+                                service_name="local_costmap/clear_entirely_local_costmap"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Recovery-2"
+                                service_name="global_costmap/clear_entirely_global_costmap"/>
+            <Wait wait_duration="0.25"/>
+            <RemovePassedGoals input_goals="{goals}"
+                               output_goals="{goals}"
+                               radius="0.7"/>
+            <ComputePathThroughPoses server_timeout="1000" goals="{goals}"
+                                     path="{candidate_path}"
+                                     planner_id="GridBased"/>
+            <GenerateMincoCandidate server_timeout="1000" input_path="{candidate_path}"
+                                    smoothed_path="{candidate_smooth_path}"
+                                    candidate_minco="{candidate_minco}"
+                                    smoother_id="safe_geometric_smoother"
+                                    server_name="safe_geometric_smoother/generate_minco_candidate"
+                                    max_smoothing_duration="0.2"/>
+            <CommitTrajectory server_timeout="1000" candidate_path="{candidate_smooth_path}"
+                              candidate_minco="{candidate_minco}"
+                              tracking_path="{tracking_path}"
+                              server_name="trajectory_manager/commit_trajectory"
+                              allow_keep_active_on_reject="false"/>
+          </Sequence>
+
+          <Wait wait_duration="1.0"/>
+        </RoundRobin>
+      </ReactiveFallback>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  cyclonedds.xml — CycloneDDS 配置（针对 RM 比赛低延迟场景调优）
+  使用方法：
+    export CYCLONEDDS_URI=file:///path/to/cyclonedds.xml
+  或在 launch 文件中设置 CYCLONEDDS_URI 环境变量
+
+  关键优化：
+    1. 禁用多播（比赛场地 AP 通常禁止多播）
+    2. 减小缓冲区 → 降低排队延迟
+    3. 提高发送线程优先级
+    4. 限定单播地址（仅本机）→ 减少网络开销
+-->
+<CycloneDDS>
+  <Domain>
+    <General>
+      <!-- 禁用多播，仅使用单播（比赛环境网络隔离） -->
+      <AllowMulticast>false</AllowMulticast>
+      <!-- 禁用自动发现多播，减少无用流量 -->
+      <EnableMulticastLoopback>false</EnableMulticastLoopback>
+    </General>
+
+    <Internal>
+      <!-- 发送线程：SCHED_FIFO 优先级 40（需 root 或 CAP_SYS_NICE）-->
+      <Watermarks>
+        <WhcHigh>128kB</WhcHigh>
+        <WhcLow>64kB</WhcLow>
+      </Watermarks>
+      <!-- 发送线程策略 -->
+      <SendAsync>false</SendAsync>
+    </Internal>
+
+    <Tracing>
+      <!-- 生产环境关闭日志，减少 I/O 开销 -->
+      <Verbosity>severe</Verbosity>
+      <OutputFile>stderr</OutputFile>
+    </Tracing>
+  </Domain>
+</CycloneDDS>

@@ -1,0 +1,6 @@
+string mode
+string frame_id
+geometry_msgs/Polygon corridor
+---
+bool success
+string message

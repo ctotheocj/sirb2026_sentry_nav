@@ -1,0 +1,306 @@
+import os
+import sys
+
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration, PythonExpression, TextSubstitution
+from launch_ros.actions import Node
+from launch_ros.descriptions import ParameterFile
+from nav2_common.launch import ReplaceString, RewrittenYaml
+
+sys.path.append(os.path.dirname(__file__))
+from motion_profile_utils import prepare_motion_profile_params
+
+
+def generate_launch_description():
+    launch_file = os.path.abspath(__file__)
+    if "/install/" in launch_file:
+        ws_root = launch_file.split("/install/")[0]
+        pkg_parent = os.path.join(ws_root, "src", "sirb2026_sentry_nav")
+    else:
+        pkg_parent = os.path.join(os.path.dirname(__file__), "..", "..")
+
+    pkg_parent = os.path.abspath(pkg_parent)
+    bringup_src_dir = os.path.join(pkg_parent, "sirb2026_nav_bringup")
+    launch_dir = os.path.join(bringup_src_dir, "launch")
+
+    namespace             = LaunchConfiguration("namespace")
+    slam                  = LaunchConfiguration("slam")
+    world                 = LaunchConfiguration("world")
+    map_yaml_file         = LaunchConfiguration("map")
+    prior_pcd_file        = LaunchConfiguration("prior_pcd_file")
+    use_sim_time          = LaunchConfiguration("use_sim_time")
+    params_file           = LaunchConfiguration("params_file")
+    autostart             = LaunchConfiguration("autostart")
+    use_composition       = LaunchConfiguration("use_composition")
+    use_respawn           = LaunchConfiguration("use_respawn")
+    rviz_config_file      = LaunchConfiguration("rviz_config_file")
+    use_rviz              = LaunchConfiguration("use_rviz")
+    use_yaw_fusion        = LaunchConfiguration("use_yaw_fusion")
+    use_dodge_manager     = LaunchConfiguration("use_dodge_manager")
+    use_tf_jump_monitor   = LaunchConfiguration("use_tf_jump_monitor")
+    controller            = LaunchConfiguration("controller")
+
+    declare_namespace_cmd = DeclareLaunchArgument(
+        "namespace", default_value="red_standard_robot1",
+    )
+    declare_slam_cmd = DeclareLaunchArgument(
+        "slam", default_value="False",
+    )
+    declare_world_cmd = DeclareLaunchArgument(
+        "world", default_value="rmul_2025",
+    )
+    declare_map_yaml_cmd = DeclareLaunchArgument(
+        "map",
+        default_value=[
+            TextSubstitution(text=os.path.join(bringup_src_dir, "map", "simulation", "")),
+            world,
+            TextSubstitution(text=".yaml"),
+        ],
+    )
+    declare_prior_pcd_file_cmd = DeclareLaunchArgument(
+        "prior_pcd_file",
+        default_value=[
+            TextSubstitution(text=os.path.join(bringup_src_dir, "pcd", "simulation", "")),
+            world,
+            TextSubstitution(text=".pcd"),
+        ],
+    )
+    declare_use_sim_time_cmd = DeclareLaunchArgument("use_sim_time", default_value="True")
+    declare_params_file_cmd = DeclareLaunchArgument(
+        "params_file",
+        default_value=os.path.join(bringup_src_dir, "config", "simulation", "nav2_params.yaml"),
+    )
+    declare_autostart_cmd = DeclareLaunchArgument("autostart", default_value="true")
+    declare_use_composition_cmd = DeclareLaunchArgument("use_composition", default_value="True")
+    declare_use_respawn_cmd = DeclareLaunchArgument("use_respawn", default_value="False")
+    declare_rviz_config_file_cmd = DeclareLaunchArgument(
+        "rviz_config_file",
+        default_value=os.path.join(bringup_src_dir, "rviz", "nav2_default_view.rviz"),
+    )
+    declare_use_rviz_cmd = DeclareLaunchArgument("use_rviz", default_value="True")
+    declare_use_yaw_fusion_cmd = DeclareLaunchArgument("use_yaw_fusion", default_value="False")
+    declare_use_dodge_manager_cmd = DeclareLaunchArgument("use_dodge_manager", default_value="False")
+    declare_use_tf_jump_monitor_cmd = DeclareLaunchArgument(
+        "use_tf_jump_monitor", default_value="True",
+    )
+    declare_controller_cmd = DeclareLaunchArgument("controller", default_value="mpc")
+    prepare_motion_profile_cmd = OpaqueFunction(
+        function=lambda context, *_: prepare_motion_profile_params(
+            context, params_file, "simulation"))
+
+    params_file_with_world = ReplaceString(
+        source_file=params_file,
+        replacements={
+            "<controller_plugin>": PythonExpression([
+                '"pb_omni_pid_pursuit_controller::OmniPidPursuitController" if "',
+                controller, '" == "pid" else "f_mpc_controller::MpcController"',
+            ]),
+
+        },
+    )
+
+    configured_params = ParameterFile(
+        RewrittenYaml(
+            source_file=params_file_with_world,
+            root_key=namespace,
+            param_rewrites={},
+            convert_types=True,
+        ),
+        allow_substs=True,
+    )
+
+    start_velodyne_convert_tool = Node(
+        package="ign_sim_pointcloud_tool",
+        executable="ign_sim_pointcloud_tool_node",
+        name="ign_sim_pointcloud_tool",
+        output="screen",
+        namespace=namespace,
+        parameters=[configured_params],
+    )
+
+    bringup_cmd = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(launch_dir, "bringup_launch.py")),
+        launch_arguments={
+            "namespace":             namespace,
+            "slam":                  slam,
+            "map":                   map_yaml_file,
+            "prior_pcd_file":        prior_pcd_file,
+            "use_sim_time":          use_sim_time,
+            "params_file":           params_file_with_world,
+            "autostart":             autostart,
+            "use_composition":       use_composition,
+            "use_respawn":           use_respawn,
+        }.items(),
+    )
+
+    start_yaw_fusion_node = Node(
+        package="yaw_fusion",
+        executable="yaw_fusion_node",
+        name="yaw_fusion",
+        namespace=namespace,
+        output="screen",
+        condition=IfCondition(use_yaw_fusion),
+        parameters=[configured_params],
+    )
+
+    start_dodge_manager_node = Node(
+        package="dodge_manager",
+        executable="dodge_manager_node",
+        name="dodge_manager",
+        namespace=namespace,
+        output="screen",
+        condition=IfCondition(use_dodge_manager),
+        parameters=[configured_params, {"enable_dodge": True}],
+        remappings=[("/tf", "tf"), ("/tf_static", "tf_static")],
+    )
+
+    start_tf_jump_monitor_node = Node(
+        package="sirb2026_nav_bringup",
+        executable="tf_jump_monitor.py",
+        name="tf_jump_monitor",
+        namespace=namespace,
+        output="screen",
+        condition=IfCondition(use_tf_jump_monitor),
+        parameters=[
+            {"use_sim_time": use_sim_time},
+            {"edges": [
+                "map:odom",
+                "odom:base_footprint",
+                "base_footprint:gimbal_yaw",
+                "gimbal_yaw:gimbal_yaw_fake",
+            ]},
+            {"jump_distance_threshold": 0.20},
+            {"jump_speed_threshold": 6.0},
+            {"jump_yaw_threshold": 0.35},
+            {"odom_base_yaw_rate_threshold": 5.0},
+            {"startup_grace_sec": 8.0},
+            {"max_tf_age_sec": 0.5},
+        ],
+        remappings=[("/tf", "tf"), ("/tf_static", "tf_static")],
+    )
+
+    start_lidar_preprocessor_node = Node(
+        package="lidar_preprocessor",
+        executable="lidar_preprocessor_node",
+        name="lidar_preprocessor",
+        namespace=namespace,
+        output="screen",
+        parameters=[configured_params],
+    )
+
+    start_dynamic_point_detector_node = Node(
+        package="dynamic_point_detector",
+        executable="dynamic_point_detector_node",
+        name="dynamic_point_detector",
+        namespace=namespace,
+        output="screen",
+        parameters=[configured_params],
+    )
+
+    start_dynamic_obstacle_tracker_node = Node(
+        package="dynamic_obstacle_tracker",
+        executable="obstacle_tracker_node",
+        name="dynamic_obstacle_tracker",
+        namespace=namespace,
+        output="screen",
+        parameters=[configured_params],
+    )
+
+    def _make_grid_map_node(context, *_):
+        # When using composition, GridMapComponent runs inside the container instead
+        if context.launch_configurations.get("use_composition", "False").lower() == "true":
+            return []
+        world_val = context.launch_configurations["world"]
+        ns_val = context.launch_configurations["namespace"]
+        map_yaml_path = os.path.join(
+            bringup_src_dir, "map", "simulation", f"{world_val}.yaml")
+        extra = {}
+        if os.path.exists(map_yaml_path):
+            try:
+                import yaml as _yaml
+                with open(map_yaml_path) as f:
+                    m = _yaml.safe_load(f)
+                res = float(m["resolution"])
+                ox, oy = float(m["origin"][0]), float(m["origin"][1])
+                img = m["image"]
+                if not os.path.isabs(img):
+                    img = os.path.join(os.path.dirname(map_yaml_path), img)
+                with open(img, "rb") as f:
+                    f.readline()
+                    line = f.readline()
+                    while line.startswith(b"#"):
+                        line = f.readline()
+                    w, h = map(int, line.split())
+                extra = {
+                    "map.origin": [ox, oy, -0.5],
+                    "map.size":   [round(w * res, 3), round(h * res, 3), 2.0],
+                }
+            except Exception as e:
+                print(f"[grid_map_node] Failed to read map yaml: {e}, using yaml defaults")
+        return [Node(
+            package="plan_env",
+            executable="grid_map_node",
+            name="grid_map_node",
+            namespace=ns_val,
+            output="screen",
+            parameters=[configured_params, extra] if extra else [configured_params],
+        )]
+
+    start_grid_map_node_cmd = OpaqueFunction(function=_make_grid_map_node)
+
+
+    joy_teleop_cmd = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(launch_dir, "joy_teleop_launch.py")),
+        launch_arguments={
+            "namespace":       namespace,
+            "use_sim_time":    use_sim_time,
+            "joy_config_file": params_file_with_world,
+        }.items(),
+    )
+
+    rviz_cmd = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(launch_dir, "rviz_launch.py")),
+        condition=IfCondition(use_rviz),
+        launch_arguments={
+            "namespace":    namespace,
+            "use_sim_time": use_sim_time,
+            "rviz_config":  rviz_config_file,
+        }.items(),
+    )
+
+    ld = LaunchDescription()
+
+    ld.add_action(declare_namespace_cmd)
+    ld.add_action(declare_slam_cmd)
+    ld.add_action(declare_world_cmd)
+    ld.add_action(declare_map_yaml_cmd)
+    ld.add_action(declare_prior_pcd_file_cmd)
+    ld.add_action(declare_use_sim_time_cmd)
+    ld.add_action(declare_params_file_cmd)
+    ld.add_action(declare_autostart_cmd)
+    ld.add_action(declare_use_composition_cmd)
+    ld.add_action(declare_use_respawn_cmd)
+    ld.add_action(declare_rviz_config_file_cmd)
+    ld.add_action(declare_use_rviz_cmd)
+    ld.add_action(declare_use_yaw_fusion_cmd)
+    ld.add_action(declare_use_dodge_manager_cmd)
+    ld.add_action(declare_use_tf_jump_monitor_cmd)
+    ld.add_action(declare_controller_cmd)
+    ld.add_action(prepare_motion_profile_cmd)
+
+    ld.add_action(start_velodyne_convert_tool)
+    ld.add_action(start_lidar_preprocessor_node)
+    ld.add_action(start_dynamic_point_detector_node)
+    ld.add_action(start_grid_map_node_cmd)
+    ld.add_action(bringup_cmd)
+    ld.add_action(start_yaw_fusion_node)
+    ld.add_action(start_dodge_manager_node)
+    ld.add_action(start_tf_jump_monitor_node)
+    ld.add_action(start_dynamic_obstacle_tracker_node)
+    ld.add_action(joy_teleop_cmd)
+    ld.add_action(rviz_cmd)
+
+    return ld

@@ -41,8 +41,9 @@ private:
     const nav_msgs::msg::Odometry::ConstSharedPtr & odometry,
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr & laserCloud2);
 
-  tf2::Transform getTransform(
-    const std::string & target_frame, const std::string & source_frame, const rclcpp::Time & time);
+  bool getTransform(
+    const std::string & target_frame, const std::string & source_frame, const rclcpp::Time & time,
+    tf2::Transform & transform);
 
   void publishTransform(
     const tf2::Transform & transform, const std::string & parent_frame,
@@ -52,9 +53,34 @@ private:
     const tf2::Transform & transform, std::string parent_frame, const std::string & child_frame,
     const rclcpp::Time & stamp);
 
+  tf2::Transform makePlanarBaseTransform(const tf2::Transform & transform) const;
+
+  static double normalizeAngle(double angle);
+
+  void diagnoseOdomJump(
+    const tf2::Transform & tf_odom_to_lidar, const tf2::Transform & tf_lidar_to_chassis,
+    const tf2::Transform & tf_odom_to_chassis, const rclcpp::Time & stamp);
+
   std::string lidar_frame_;
   std::string base_frame_;
   std::string robot_base_frame_;
+  double max_sync_interval_sec_{0.03};
+  bool use_initial_lidar_to_base_transform_{false};
+  bool flatten_base_pose_{true};
+  bool flatten_base_pose_z_{true};
+  bool log_odom_jump_diagnostics_{true};
+  double odom_jump_yaw_threshold_{0.35};
+  double odom_jump_yaw_rate_threshold_{5.0};
+  double odom_jump_distance_threshold_{0.20};
+  double odom_jump_speed_threshold_{6.0};
+  double odom_pose_cov_xy_{0.02};
+  double odom_pose_cov_z_{0.05};
+  double odom_pose_cov_rp_{0.05};
+  double odom_pose_cov_yaw_{0.03};
+  double odom_twist_cov_xy_{0.05};
+  double odom_twist_cov_z_{0.10};
+  double odom_twist_cov_rp_{0.10};
+  double odom_twist_cov_yaw_{0.05};
 
   std::unique_ptr<tf2_ros::TransformBroadcaster> br_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_laser_cloud_;
@@ -71,6 +97,18 @@ private:
   std::unique_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
 
   tf2::Transform tf_lidar_to_robot_base_;
+  tf2::Transform tf_lidar_to_chassis_;
+  bool has_lidar_to_chassis_{false};
+  bool has_lidar_to_robot_base_{false};
+  tf2::Transform previous_odometry_transform_;
+  rclcpp::Time previous_odometry_stamp_;
+  bool has_previous_odometry_{false};
+
+  tf2::Transform previous_lidar_odometry_transform_;
+  tf2::Transform previous_lidar_to_chassis_transform_;
+  tf2::Transform previous_chassis_diagnostic_transform_;
+  rclcpp::Time previous_chassis_diagnostic_stamp_;
+  bool has_previous_jump_diagnostic_{false};
 };
 
 }  // namespace sensor_scan_generation

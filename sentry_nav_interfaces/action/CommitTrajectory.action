@@ -1,0 +1,9 @@
+sentry_nav_interfaces/MincoTrajectory candidate_minco
+bool allow_keep_active_on_reject
+---
+bool accepted
+bool active_valid
+uint64 trajectory_id
+string reason
+---
+string state

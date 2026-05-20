@@ -1,0 +1,9 @@
+string mode
+string owner_id
+string hole_id
+string frame_id
+geometry_msgs/Polygon corridor
+float32 watchdog_timeout_sec
+---
+bool success
+string message
