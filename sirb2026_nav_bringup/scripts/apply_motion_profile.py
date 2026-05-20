@@ -45,6 +45,9 @@ def derived(profile):
         "follow_v_ref_max": control_speed,
         "follow_ax_max": control_accel,
         "follow_ay_max": control_accel,
+        "follow_v_circle_max": control_speed,
+        "tracking_error_soft": float(profile["tracking_error_soft"]),
+        "tracking_error_hard": float(profile["tracking_error_hard"]),
         "pose_jump_speed_threshold": localization_jump,
         "switch_max_velocity_error": control_speed,
         "switch_max_acceleration_error": max_accel,
@@ -69,11 +72,16 @@ def apply_profile(data):
     smoother = nested_params(data, "smoother_server", "safe_geometric_smoother")
     manager = node_params(data, "trajectory_manager")
     vel = node_params(data, "velocity_smoother")
+    fake_vel = node_params(data, "fake_vel_transform")
 
     set_if_changed(follow, "v_ref_max", values["follow_v_ref_max"], changes)
     set_if_changed(follow, "ax_max", values["follow_ax_max"], changes)
     set_if_changed(follow, "ay_max", values["follow_ay_max"], changes)
+    set_if_changed(follow, "v_circle_max", values["follow_v_circle_max"], changes)
     set_if_changed(follow, "pose_jump_speed_threshold", values["pose_jump_speed_threshold"], changes)
+    set_if_changed(follow, "enable_lateral_error_ref_scaling", True, changes)
+    set_if_changed(follow, "lateral_error_slow_threshold", values["tracking_error_soft"], changes)
+    set_if_changed(follow, "lateral_error_high_threshold", values["tracking_error_hard"], changes)
 
     set_if_changed(smoother, "minco_v_ref", values["minco_v_ref"], changes)
     set_if_changed(smoother, "minco_v_max", values["minco_v_max"], changes)
@@ -100,11 +108,22 @@ def apply_profile(data):
     set_if_changed(smoother, "reuse_cached_trajectory_on_minco_failure", False, changes)
 
     set_if_changed(manager, "publish_full_active_trajectory", True, changes)
-    set_if_changed(manager, "switch_max_velocity_error", values["switch_max_velocity_error"], changes)
+    set_if_changed(
+        manager,
+        "publish_rate_hz",
+        max(20.0, float(manager.get("publish_rate_hz", 20.0))),
+        changes,
+    )
+    set_if_changed(
+        manager,
+        "switch_max_velocity_error",
+        max(values["switch_max_velocity_error"], float(manager.get("switch_max_velocity_error", 0.0))),
+        changes,
+    )
     set_if_changed(
         manager,
         "switch_max_acceleration_error",
-        values["switch_max_acceleration_error"],
+        max(values["switch_max_acceleration_error"], float(manager.get("switch_max_acceleration_error", 0.0))),
         changes,
     )
 
@@ -135,6 +154,12 @@ def apply_profile(data):
     set_if_changed(vel, "max_accel", max_accel, changes)
     set_if_changed(vel, "max_decel", max_decel, changes)
     set_if_changed(vel, "velocity_timeout", max(float(vel.get("velocity_timeout", 1.0)), 1.0), changes)
+    set_if_changed(
+        fake_vel,
+        "max_latest_cmd_age_sec",
+        min(float(fake_vel.get("max_latest_cmd_age_sec", 0.12)), 0.12),
+        changes,
+    )
 
     return changes
 

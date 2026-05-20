@@ -55,7 +55,6 @@ def generate_launch_description():
     use_robot_state_pub   = LaunchConfiguration("use_robot_state_pub")
     use_rviz              = LaunchConfiguration("use_rviz")
     use_yaw_fusion        = LaunchConfiguration("use_yaw_fusion")
-    use_dodge_manager     = LaunchConfiguration("use_dodge_manager")
 
     declare_namespace_cmd = DeclareLaunchArgument(
         "namespace",
@@ -161,18 +160,9 @@ def generate_launch_description():
         ),
     )
 
-    declare_use_dodge_manager_cmd = DeclareLaunchArgument(
-        "use_dodge_manager",
-        default_value="True",
-        description=(
-            "Launch the dodge_manager node that issues emergency evasion "
-            "navigate_to_pose goals when a hit is detected."
-        ),
-    )
-
     prepare_motion_profile_cmd = OpaqueFunction(
         function=lambda context, *_: prepare_motion_profile_params(
-            context, params_file, "reality"))
+            context, params_file, "reality", map_yaml_file))
 
     configured_params = ParameterFile(
         RewrittenYaml(
@@ -235,7 +225,6 @@ def generate_launch_description():
         name="dodge_manager",
         namespace=namespace,
         output="screen",
-        condition=IfCondition(use_dodge_manager),
         parameters=[configured_params],
         remappings=[("/tf", "tf"), ("/tf_static", "tf_static")],
     )
@@ -270,40 +259,14 @@ def generate_launch_description():
     def _make_grid_map_node(context, *_):
         if context.launch_configurations.get("use_composition", "False").lower() == "true":
             return []
-        world_val = context.launch_configurations["world"]
         ns_val = context.launch_configurations["namespace"]
-        map_yaml_path = os.path.join(
-            bringup_dir, "map", "reality", f"{world_val}.yaml")
-        extra = {}
-        if os.path.exists(map_yaml_path):
-            try:
-                import yaml as _yaml
-                with open(map_yaml_path) as f:
-                    m = _yaml.safe_load(f)
-                res = float(m["resolution"])
-                ox, oy = float(m["origin"][0]), float(m["origin"][1])
-                img = m["image"]
-                if not os.path.isabs(img):
-                    img = os.path.join(os.path.dirname(map_yaml_path), img)
-                with open(img, "rb") as f:
-                    f.readline()
-                    line = f.readline()
-                    while line.startswith(b"#"):
-                        line = f.readline()
-                    w, h = map(int, line.split())
-                extra = {
-                    "map.origin": [ox, oy, -0.5],
-                    "map.size":   [round(w * res, 3), round(h * res, 3), 2.0],
-                }
-            except Exception as e:
-                print(f"[grid_map_node] Failed to read map yaml: {e}, using yaml defaults")
         return [Node(
             package="plan_env",
             executable="grid_map_node",
             name="grid_map_node",
             namespace=ns_val,
             output="screen",
-            parameters=[configured_params, extra] if extra else [configured_params],
+            parameters=[configured_params],
         )]
 
     start_grid_map_node_cmd = OpaqueFunction(function=_make_grid_map_node)
@@ -343,7 +306,6 @@ def generate_launch_description():
     ld.add_action(declare_rviz_config_file_cmd)
     ld.add_action(declare_use_rviz_cmd)
     ld.add_action(declare_use_yaw_fusion_cmd)
-    ld.add_action(declare_use_dodge_manager_cmd)
     ld.add_action(prepare_motion_profile_cmd)
 
     ld.add_action(start_robot_state_publisher_cmd)

@@ -45,6 +45,7 @@ def generate_launch_description():
     world = LaunchConfiguration("world")
 
     map_yaml_file = LaunchConfiguration("map")
+    prior_pcd_file = LaunchConfiguration("prior_pcd_file")
     params_file = LaunchConfiguration("params_file")
     autostart = LaunchConfiguration("autostart")
     rviz_config_file = LaunchConfiguration("rviz_config")
@@ -53,8 +54,11 @@ def generate_launch_description():
 
     declare_world_cmd = DeclareLaunchArgument(
         "world",
-        default_value="rmul_2024",
-        description="Select world: 'rmul_2024' or 'rmuc_2024' (map file share the same name as the this parameter)",
+        default_value="rmul_2025",
+        description=(
+            "Select simulation world. The default must have both map/simulation/<world>.yaml "
+            "and pcd/simulation/<world>.pcd."
+        ),
     )
 
     declare_map_yaml_cmd = DeclareLaunchArgument(
@@ -65,6 +69,15 @@ def generate_launch_description():
             TextSubstitution(text=".yaml"),
         ],
         description="Full path to map file to load",
+    )
+    declare_prior_pcd_file_cmd = DeclareLaunchArgument(
+        "prior_pcd_file",
+        default_value=[
+            TextSubstitution(text=os.path.join(bringup_dir, "pcd", "simulation", "")),
+            world,
+            TextSubstitution(text=".pcd"),
+        ],
+        description="Full path to prior PCD file to load",
     )
     declare_params_file_cmd = DeclareLaunchArgument(
         "params_file",
@@ -94,15 +107,12 @@ def generate_launch_description():
 
     bringup_cmd_group = []
     for robot_name in robots_list:
-        init_pose = robots_list[robot_name]
         group = GroupAction(
             [
                 LogInfo(
                     msg=[
                         "Launching namespace=",
                         robot_name,
-                        " init_pose=",
-                        str(init_pose),
                     ]
                 ),
                 IncludeLaunchDescription(
@@ -123,19 +133,13 @@ def generate_launch_description():
                     ),
                     launch_arguments={
                         "namespace": robot_name,
+                        "world": world,
                         "map": map_yaml_file,
+                        "prior_pcd_file": prior_pcd_file,
                         "use_sim_time": "True",
                         "params_file": params_file,
                         "autostart": autostart,
                         "use_rviz": "False",
-                        "headless": "False",
-                        "x_pose": TextSubstitution(text=str(init_pose["x"])),
-                        "y_pose": TextSubstitution(text=str(init_pose["y"])),
-                        "z_pose": TextSubstitution(text=str(init_pose["z"])),
-                        "roll": TextSubstitution(text=str(init_pose["roll"])),
-                        "pitch": TextSubstitution(text=str(init_pose["pitch"])),
-                        "yaw": TextSubstitution(text=str(init_pose["yaw"])),
-                        "robot_name": TextSubstitution(text=robot_name),
                     }.items(),
                 ),
             ]
@@ -147,6 +151,7 @@ def generate_launch_description():
 
     ld.add_action(declare_world_cmd)
     ld.add_action(declare_map_yaml_cmd)
+    ld.add_action(declare_prior_pcd_file_cmd)
     ld.add_action(declare_params_file_cmd)
     ld.add_action(declare_use_rviz_cmd)
     ld.add_action(declare_autostart_cmd)

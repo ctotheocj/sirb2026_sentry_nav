@@ -1,104 +1,71 @@
 # dynamic_obstacle_tracker
 
-基于 LiDAR 点云的动态障碍物（敌方机器人）实时检测与跟踪。
-直接订阅原始点云，内部完成地面分割 + 网格哈希 DBSCAN 聚类 + Gap 分裂 + EKF-SORT 多目标跟踪。
+`dynamic_obstacle_tracker` converts the dynamic point cloud produced by
+`dynamic_point_detector` into tracked obstacle predictions for the MPC controller.
 
-## 节点
+## Current Chain
 
-`obstacle_tracker_node`（类名：`ObstacleTrackerNode`）
-
-## 话题
-
-### 订阅
-
-| 话题 | 类型 | 说明 |
-|------|------|------|
-| `/cloud_registered` | `sensor_msgs/PointCloud2` | Point-LIO map 帧点云（实车）；仿真改为 `/pointcloud` |
-
-### 发布
-
-| 话题 | 类型 | 说明 |
-|------|------|------|
-| `/dynamic_obstacles` | `sentry_nav_interfaces/TrackedObstacleArray` | 跟踪障碍物数组（ID、位置、速度、半径、置信度） |
-| `/dynamic_obstacles_viz` | `visualization_msgs/MarkerArray` | 圆柱 + 速度箭头 markers |
-| `/dynamic_obstacles_cloud` | `sensor_msgs/PointCloud2` | 彩色聚类点云（每个障碍物簇独立颜色，用于 RViz 调试） |
-
-## 算法流程
-
-```
-原始点云 (/cloud_registered)
-  │
-  ├─ 1. 体素下采样 (voxel_leaf_size)
-  │
-  ├─ 2. 自适应网格地面分割 (ground_filter.hpp)
-  │      • XY 平面划格 (cell_size=0.4m)
-  │      • 每格取低 5% z 分位 → 本地地面高度
-  │      • 3×3 邻居均值平滑
-  │      • 保留 z ∈ [地面+min_h, 地面+max_h] 的点
-  │      → 天然适配 15-20° 坡面，无需全局平面假设
-  │
-  ├─ 3. 网格哈希 DBSCAN 2D 聚类，O(N) 均摊
-  │
-  ├─ 4. Gap-Split 后处理：PCA 投影 + 最大间隙检测，分离多机器人合并簇
-  │
-  ├─ 5. EKF-SORT 多目标跟踪：状态 [px, py, vx, vy]，贪心匈牙利关联
-  │
-  └─ 发布三路输出
+```text
+registered_scan + odometry
+  -> dynamic_point_detector
+  -> dynamic_points
+  -> dynamic_obstacle_tracker
+  -> dynamic_obstacles
+  -> f_mpc_controller
 ```
 
-## EKF 状态与轨迹生命周期
+The tracker no longer performs raw point-cloud ground segmentation itself. Ground/static
+separation is owned by `dynamic_point_detector`; this package clusters `dynamic_points`,
+associates detections across frames, and publishes predicted obstacle positions.
 
-- 状态向量：`[px, py, vx, vy]`，匀速运动模型
-- 轨迹：`New` → `Confirmed`（`age >= confirm_frames`）→ `Deleted`（`missed > max_missed`）
+## Node
 
-## 参数
+`obstacle_tracker_node`
+
+## Topics
+
+| Topic | Type | Direction | Notes |
+| --- | --- | --- | --- |
+| `dynamic_points` | `sensor_msgs/msg/PointCloud2` | subscribe | Dynamic-only points from M-detector |
+| `dynamic_obstacles` | `sentry_nav_interfaces/msg/TrackedObstacleArray` | publish | Tracked obstacle state and prediction |
+| `vis/tracked_obstacles` | `visualization_msgs/msg/MarkerArray` | publish | Debug markers |
+
+## Algorithm
+
+1. Convert incoming `PointCloud2` to PCL XYZ points.
+2. Extract Euclidean clusters with `cluster_tolerance`, `cluster_min_size`, and
+   `cluster_max_size`.
+3. Use Hungarian assignment with `match_dist_max` to associate clusters to existing tracks.
+4. Track each obstacle with a constant-velocity Kalman filter state `[x, y, vx, vy]`.
+5. Publish confirmed tracks after `confirm_frames`, remove stale tracks after
+   `max_missed_frames`.
+6. Fill `predicted_positions` using `prediction_steps` and `prediction_dt`.
+
+## Parameters
 
 ```yaml
-obstacle_tracker_node:
+dynamic_obstacle_tracker:
   ros__parameters:
-    # 输入话题
-    pointcloud_topic: /cloud_registered   # 实车; 仿真改 /pointcloud
-
-    # 体素下采样
-    voxel_leaf_size: 0.07                 # (m)
-
-    # 地面分割
-    ground_cell_size: 0.4                 # 网格尺寸 (m)
-    ground_low_percentile: 0.05           # 低百分位（5%）作为地面估计
-    obstacle_min_height: 0.10             # 地面以上最小有效高度 (m)
-    obstacle_max_height: 1.80             # 地面以上最大有效高度 (m)
-
-    # DBSCAN 聚类
-    dbscan_epsilon: 0.5                   # 邻域半径 (m)
-    dbscan_min_pts: 3                     # 核心点最小邻居数
-
-    # Gap 分裂
-    gap_split_max_single_radius: 0.28     # 单个机器人最大半径 (m)
-    gap_split_threshold: 0.06             # 分裂最小间隙 (m)
-
-    # EKF-SORT
-    q_pos: 0.01
-    q_vel: 2.0                            # 全向轮大机动，速度噪声需大
-    r_pos: 0.05
-    association_threshold: 1.5            # 匹配距离阈值 (m)
-    confirm_frames: 3
+    input_topic: dynamic_points
+    output_topic: dynamic_obstacles
+    viz_topic: vis/tracked_obstacles
+    cluster_tolerance: 0.4
+    cluster_min_size: 3
+    cluster_max_size: 500
+    match_dist_max: 2.0
+    vel_alpha: 0.4
     max_missed_frames: 5
-    obstacle_radius_default: 0.35         # (m)
+    confirm_frames: 2
+    prediction_steps: 20
+    prediction_dt: 0.1
     max_output_obstacles: 7
 ```
 
-## 输出消息格式
+`vel_alpha` is retained in the node parameters for compatibility, but the current Kalman
+update path does not use it directly.
 
-`sentry_nav_interfaces/TrackedObstacle`：
+## Build
 
+```bash
+colcon build --packages-select dynamic_obstacle_tracker
 ```
-int32 id
-float64 x, y       # 位置 (map 坐标系)
-float64 vx, vy     # 速度 (m/s)
-float64 radius     # 障碍物半径 (m)
-float32 confidence # 置信度 [0, 1]
-```
-
-## 依赖
-
-`rclcpp` `sensor_msgs` `std_msgs` `visualization_msgs` `pcl` `eigen` `sentry_nav_interfaces`

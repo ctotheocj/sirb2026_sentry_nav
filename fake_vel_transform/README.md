@@ -18,6 +18,7 @@ Related issue: [Switch from Twist to TwistStamped for cmd_vel #1594](https://git
 * `input_cmd_vel_stamped_topic` (`geometry_msgs/msg/TwistStamped`) - 机器人的带时间戳速度指令，优先使用
 * `odom_topic` (`nav_msgs/msg/Odometry`) - 里程计数据
 * `cmd_spin_topic` (`example_interfaces/msg/Float32`) - 控制底盘固定旋转速度，将会叠加到 `output_cmd_vel_topic` 中
+* `nav_yaw_topic` (`std_msgs/msg/Float64`) - `use_nav_yaw=true` 时订阅，默认 `/Nav_yaw`
 
 ## Parameters
 
@@ -33,4 +34,21 @@ Related issue: [Switch from Twist to TwistStamped for cmd_vel #1594](https://git
 * `allow_latest_tf_fallback` (`bool`, default: true) - stamped 时间戳 TF 外推失败时允许使用最新 TF 兜底
 * `tf_lookup_timeout_sec` (`double`, default: 0.01) - TF 查询超时时间
 * `stamped_cmd_timeout_sec` (`double`, default: 0.12) - stamped 速度新鲜度窗口
-* `init_spin_speed` (`double`, default: 0.0) - 若没有接收 `cmd_spin_topic`，则使用该值作为固定旋转速度
+* `max_latest_cmd_age_sec` (`double`, default: 0.12) - legacy 与 stamped 新鲜度的共同上限；实际 stamped 窗口取该值与 `stamped_cmd_timeout_sec` 的较小值
+* `init_spin_speed` (`float`, default: 0.0) - 若没有接收 `cmd_spin_topic`，则使用该值作为固定旋转速度
+* `use_nav_yaw` (`bool`, default: false) - 使用融合 yaw 代替 `odom_frame -> robot_base_frame` TF yaw
+* `nav_yaw_topic` (`string`, default: "/Nav_yaw") - 融合 yaw 话题
+
+## Full Navigation Chain
+
+在当前导航 bringup 中，速度链路为：
+
+```text
+controller_server -> cmd_vel_controller
+velocity_smoother -> cmd_vel_nav2_result
+cmd_vel_mux       -> cmd_vel_selected / cmd_vel_selected_stamped
+fake_vel_transform -> cmd_vel
+```
+
+`fake_vel_transform` 同时发布 `robot_base_frame -> fake_robot_base_frame` TF。Nav2 的
+`robot_base_frame` 配置为 `gimbal_yaw_fake`，最终输出再转换回真实 `gimbal_yaw` 相关底盘速度。

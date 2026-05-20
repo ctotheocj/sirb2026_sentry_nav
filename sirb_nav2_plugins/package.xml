@@ -37,6 +37,7 @@
   <export>
     <build_type>ament_cmake</build_type>
     <nav2_core plugin="${prefix}/behavior_plugin.xml" />
+    <nav2_costmap_2d plugin="${prefix}/costmap_plugins.xml" />
     <nav2_behavior_tree plugin="${prefix}/bt_node_plugins.xml" />
   </export>
 </package>

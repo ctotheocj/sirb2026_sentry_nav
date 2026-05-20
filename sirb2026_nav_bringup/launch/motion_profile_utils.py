@@ -33,6 +33,49 @@ def _set_xy(values, x, y, z):
     return result
 
 
+def _read_pgm_size(image_path):
+    with open(image_path, "rb") as f:
+        magic = f.readline().strip()
+        if magic not in (b"P2", b"P5"):
+            raise ValueError(f"unsupported PGM magic {magic!r}")
+
+        tokens = []
+        while len(tokens) < 2:
+            line = f.readline()
+            if not line:
+                break
+            line = line.split(b"#", 1)[0]
+            tokens.extend(line.split())
+
+    if len(tokens) < 2:
+        raise ValueError("PGM header does not contain width and height")
+    return int(tokens[0]), int(tokens[1])
+
+
+def apply_grid_map_bounds_from_map_yaml(data, map_yaml_path):
+    if not map_yaml_path or not os.path.exists(map_yaml_path):
+        return None
+
+    with open(map_yaml_path, "r") as f:
+        map_data = yaml.safe_load(f)
+    if not isinstance(map_data, dict):
+        raise ValueError(f"invalid map yaml: {map_yaml_path}")
+
+    image_path = map_data["image"]
+    if not os.path.isabs(image_path):
+        image_path = os.path.join(os.path.dirname(map_yaml_path), image_path)
+
+    width, height = _read_pgm_size(image_path)
+    resolution = float(map_data["resolution"])
+    origin = map_data.get("origin", [0.0, 0.0, 0.0])
+
+    grid_map = _node_params(data, "grid_map_node").setdefault("map", {})
+    grid_map["origin"] = [float(origin[0]), float(origin[1]), -0.5]
+    grid_map["size"] = [round(width * resolution, 3), round(height * resolution, 3), 2.0]
+    grid_map["resolution"] = resolution
+    return grid_map["origin"], grid_map["size"]
+
+
 def apply_motion_profile_to_dict(data):
     profile = _node_params(data, "motion_profile")
     max_speed = float(profile["max_speed"])
@@ -96,11 +139,33 @@ def apply_motion_profile_to_dict(data):
         float(velocity.get("max_decel", [0.0, 0.0, 0.0])[2]))
 
 
-def prepare_motion_profile_params(context, params_file_config, label):
+def apply_launch_mode_guards(data, use_composition):
+    if use_composition:
+        return False
+    smoother = _plugin_params(data, "smoother_server", "safe_geometric_smoother")
+    if not bool(smoother.get("minco_use_esdf", False)):
+        return False
+    smoother["minco_use_esdf"] = False
+    return True
+
+
+def prepare_motion_profile_params(context, params_file_config, label, map_file_config=None):
     source = context.perform_substitution(params_file_config)
     with open(source, "r") as f:
         data = yaml.safe_load(f)
     apply_motion_profile_to_dict(data)
+    use_composition = context.launch_configurations.get("use_composition", "False").lower() == "true"
+    esdf_disabled = apply_launch_mode_guards(data, use_composition)
+    map_yaml_path = ""
+    if map_file_config is not None:
+        map_yaml_path = context.perform_substitution(map_file_config)
+    else:
+        map_yaml_path = context.launch_configurations.get("map", "")
+    try:
+        bounds = apply_grid_map_bounds_from_map_yaml(data, map_yaml_path)
+    except Exception as exc:
+        print(f"[motion_profile] failed to apply grid_map bounds from {map_yaml_path}: {exc}")
+        bounds = None
 
     namespace = context.launch_configurations.get("namespace", "robot")
     safe_ns = "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in namespace)
@@ -112,4 +177,9 @@ def prepare_motion_profile_params(context, params_file_config, label):
 
     context.launch_configurations["params_file"] = output
     print(f"[motion_profile] generated params: {output}")
+    if bounds:
+        origin, size = bounds
+        print(f"[motion_profile] grid_map bounds origin={origin} size={size}")
+    if esdf_disabled:
+        print("[motion_profile] use_composition=false; disabled smoother minco_use_esdf because GridMapRegistry is process-local")
     return []

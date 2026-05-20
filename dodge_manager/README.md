@@ -1,76 +1,80 @@
 # dodge_manager
 
-哨兵机器人受击闪避管理器。监听裁判系统血量扣减事件，在指定闪避区域内自动执行闪避动作。
+`dodge_manager_node` listens for referee-system HP deduction events and can temporarily
+take over velocity output to execute evasive moves inside a configured dodge zone.
 
-## 节点
+The top-level navigation launch files start `dodge_manager_node` unconditionally. Whether it
+actually performs evasive actions is controlled only by
+`dodge_manager.ros__parameters.enable_dodge` in the YAML.
 
-`dodge_manager_node`
+## Topics
 
-## 话题
+Subscribed:
 
-### 订阅
+| Topic | Type | Notes |
+| --- | --- | --- |
+| `/referee/robot_status` | `pb_rm_interfaces/msg/RobotStatus` | Hit detection |
+| `/tracker/target` | `auto_aim_interfaces/msg/Target` | FOUND_STOP mode target detection |
+| `local_costmap/costmap_raw` | `nav2_msgs/msg/Costmap` | Direction safety sampling |
+| `goal_pose` | `geometry_msgs/msg/PoseStamped` | Latest navigation goal |
 
-| 话题 | 类型 | 说明 |
-|------|------|------|
-| `/referee/robot_status` | `pb_rm_interfaces/RobotStatus` | 裁判系统状态，用于检测受击（HP扣减） |
-| `/tracker/target` | `auto_aim_interfaces/Target` | 敌方目标跟踪（FOUND_STOP模式使用） |
-| `local_costmap/costmap_raw` | `nav2_msgs/Costmap` | 本地代价地图，用于验证闪避方向安全性 |
-| `goal_pose` | `geometry_msgs/PoseStamped` | 导航目标点 |
+Published:
 
-### 发布
+| Topic | Type | Notes |
+| --- | --- | --- |
+| `cmd_vel` | `geometry_msgs/msg/Twist` | Direct evasion velocity output |
 
-| 话题 | 类型 | 说明 |
-|------|------|------|
-| `cmd_vel` | `geometry_msgs/Twist` | 闪避期间直接输出速度指令 |
+Action client:
 
-## Action 客户端
+| Action | Type | Notes |
+| --- | --- | --- |
+| `navigate_to_pose` | `nav2_msgs/action/NavigateToPose` | Pause/resume navigation around dodge execution |
 
-| Action | 类型 | 说明 |
-|--------|------|------|
-| `navigate_to_pose` | `nav2_msgs/action/NavigateToPose` | 暂停/恢复导航 |
+## Parameters
 
-## 控制频率
-
-20 Hz
-
-## 状态机
-
-| 状态 | 说明 |
-|------|------|
-| `IDLE` | 正常导航，不介入 |
-| `MONITORING` | 在闪避区域内，监听受击 |
-| `DODGING` | 执行闪避（子状态: PLAN → MOVE → DONE），非阻塞 |
-| `FOUND_STOP` | 发现敌人，发出停止指令 |
-
-## 算法流程
-
-1. 检测 HP 扣减（`hp_deduction_reason == 0`）
-2. 检查机器人是否在 4 顶点多边形闪避区内
-3. 通过 costmap 采样验证逃跑方向安全性（36 方向采样）
-4. P 控制闭环移动，执行 3 次闪避
-5. 闪避完成后恢复导航
-
-## 参数
-
-配置文件：`dodge_manager/config/dodge_manager.yaml`
+The parameters can be loaded from `dodge_manager/config/dodge_manager.yaml` or from the
+main `sirb2026_nav_bringup/config/*/nav2_params.yaml`.
 
 ```yaml
 dodge_manager:
   ros__parameters:
-    enable_dodge: false              # 是否启用闪避功能
-    robot_radius: 0.20               # 机器人半径 (m)
-    dodge_distance: 1.0              # 单次闪避距离 (m)
-    dodge_velocity: 1.5              # 闪避速度 (m/s)
-    dodge_count: 3                   # 每次触发最大闪避次数
-    safety_margin: 0.15              # 安全裕度 (m)
-    direction_samples: 36            # 方向采样数
-    arrive_threshold: 0.15           # 到达判断阈值 (m)
-    # 闪避区域（4顶点多边形，世界坐标系，单位m）
-    dodge_zone: [x1, y1, x2, y2, x3, y3, x4, y4]
+    enable_dodge: false
+    global_frame: odom
+    robot_frame: gimbal_yaw
+    control_frequency: 20.0
+
+    dodge_zone:
+      x1: -2.0
+      y1: -2.0
+      x2:  2.0
+      y2: -2.0
+      x3:  2.0
+      y3:  2.0
+      x4: -2.0
+      y4:  2.0
+
+    robot_status_topic: /referee/robot_status
+    tracker_target_topic: /tracker/target
+    cmd_vel_topic: cmd_vel
+    costmap_topic: local_costmap/costmap_raw
+    goal_pose_topic: goal_pose
+
+    robot_radius: 0.20
+    dodge_distance: 1.0
+    dodge_velocity: 1.5
+    dodge_count: 3
+    safety_margin: 0.15
+    direction_samples: 36
+    costmap_check_resolution: 0.05
+    arrive_threshold: 0.15
 ```
 
-`dodge_zone` 按顺序给出 4 个顶点的 x、y 坐标，共 8 个浮点数，顶点顺序需构成合法凸多边形。
+`dodge_zone` is a four-point polygon expressed as nested parameters
+`dodge_zone.x1`, `dodge_zone.y1`, ..., `dodge_zone.y4`. It is not an 8-element YAML array.
 
-## 依赖
+## State Machine
 
-`rclcpp` `rclcpp_action` `geometry_msgs` `nav2_msgs` `pb_rm_interfaces` `auto_aim_interfaces` `tf2`
+- `IDLE`: no intervention
+- `MONITORING`: robot is inside the dodge zone and waiting for hit events
+- `DODGING`: non-blocking plan/move/done dodge execution
+- `FOUND_STOP`: target detected and stop command active

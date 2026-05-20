@@ -22,7 +22,7 @@ point_lio:
     runtime_pos_log_enable: False                       # Option: True
 
     common:
-      lid_topic: "livox/lidar"
+      lid_topic: "velodyne_points"
       imu_topic: "livox/imu"
       con_frame: False                                  # True: if you need to combine several LiDAR frames into one
       con_frame_num: 1                                  # the number of frames combined
@@ -37,9 +37,9 @@ point_lio:
       init_pose: [ 0.0, 0.0, 0.0 ]
 
     preprocess:
-      lidar_type: 1                                     # 1 for Livox serials LiDAR, 2 for Velodyne LiDAR, 3 for ouster LiDAR
-      scan_line: 4
-      timestamp_unit: 3                                 # the unit of time/t field in the PointCloud2 rostopic: 0-second, 1-milisecond, 2-microsecond, 3-nanosecond.
+      lidar_type: 2                                     # 1 for Livox serials LiDAR, 2 for Velodyne LiDAR, 3 for ouster LiDAR
+      scan_line: 32
+      timestamp_unit: 2                                 # the unit of time/t field in the PointCloud2 rostopic: 0-second, 1-milisecond, 2-microsecond, 3-nanosecond.
       blind: 0.5
 
     mapping:
@@ -47,24 +47,24 @@ point_lio:
       extrinsic_est_en: False                           # for aggressive motion, set this variable False
       imu_time_inte: 0.005                              # = 1 / frequency of IMU
       lidar_time_inte: 0.1
-      satu_acc: 4.0                                     # the saturation value of IMU's acceleration. not related to the units
+      satu_acc: 30.0                                    # the saturation value of IMU's acceleration. not related to the units
       satu_gyro: 35.0                                   # the saturation value of IMU's angular velocity. not related to the units
-      acc_norm: 1.0                                     # 1.0 for g as unit, 9.81 for m/s^2 as unit of the IMU's acceleration
-      lidar_meas_cov: 0.01                              # 0.001
+      acc_norm: 9.81                                    # 1.0 for g as unit, 9.81 for m/s^2 as unit of the IMU's acceleration
+      lidar_meas_cov: 0.001                             # 0.001
       acc_cov_output: 500.0
       gyr_cov_output: 1000.0
       b_acc_cov: 0.0001
       b_gyr_cov: 0.0001
       imu_meas_acc_cov: 0.1
       imu_meas_omg_cov: 0.1
-      gyr_cov_input: 0.1                                # for IMU as input model
+      gyr_cov_input: 0.01                               # for IMU as input model
       acc_cov_input: 0.1                                # for IMU as input model
       plane_thr: 0.1                                    # 0.05, the threshold for plane criteria, the smaller, the flatter a plane
       match_s: 81.0
       ivox_grid_resolution: 0.5
-      gravity: [0.0, 0.5305473804473877, -0.8383715748786926]            # gravity to be aligned
-      gravity_init: [0.0, 0.5305473804473877, -0.8383715748786926]       # preknown gravity in the first IMU body frame, use when imu_en is False or start from a non-stationary state
-      extrinsic_T: [ -0.011, -0.02329, 0.04412 ]
+      gravity: [ 0.0, -4.9, -8.487047153776548 ]        # gravity to be aligned # rpy = [0, pi/6, 0]
+      gravity_init: [ 0.0, -4.9, -8.487047153776548 ]   # preknown gravity in the first IMU body frame, use when imu_en is False or start from a non-stationary state
+      extrinsic_T: [ 0.0, 0.0, 0.0 ]
       extrinsic_R: [ 1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,
                      0.0, 0.0, 1.0 ]
@@ -139,6 +139,7 @@ fake_vel_transform:
     allow_latest_tf_fallback: true
     tf_lookup_timeout_sec: 0.01
     stamped_cmd_timeout_sec: 0.12
+    max_latest_cmd_age_sec: 0.12
     cmd_spin_topic: cmd_spin
     init_spin_speed: 3.14
 
@@ -446,13 +447,13 @@ controller_server:
       horizon: 30
       control_frequency: 20.0
       local_plan_publish_period_sec: 0.1
-      v_ref_max: 3.5
+      v_ref_max: 2.5
       k_curvature: 4.0
       terminal_weight: 2.0
       terminal_horizon: 2
       ax_max: 3.0
       ay_max: 3.0
-      v_circle_max: 3.5
+      v_circle_max: 2.5
       goal_stop_distance: 0.15
       brake_safety_factor: 0.8
       use_odometry_state: true
@@ -616,8 +617,8 @@ smoother_server:
       dynamic_obstacle_enabled: false
       dynamic_obstacle_topic: dynamic_obstacles
       use_minco: true
-      minco_v_ref: 2.5
-      minco_v_max: 3.5
+      minco_v_ref: 1.5
+      minco_v_max: 2.5
       minco_a_max: 4.0
       minco_w_velocity: 1.0
       minco_w_acceleration: 0.5
@@ -725,7 +726,6 @@ behavior_server:
       plugin: nav2_behaviors/Spin
     backup:
       plugin: pb_nav2_behaviors/BackUpFreeSpace
-      robot_radius: 0.3
       allow_escape_from_collision: true
       escape_collision_max_distance: 0.45
     drive_on_heading:
@@ -743,6 +743,7 @@ behavior_server:
     min_rotational_vel: 0.4
     rotational_acc_lim: 3.2
     service_name: global_costmap/get_costmap
+    robot_radius: 0.3
     max_radius: 2.0
     visualize: true
 
@@ -764,12 +765,12 @@ velocity_smoother:
     scale_velocities: false
     feedback: OPEN_LOOP
     max_velocity:
-    - 3.5
-    - 3.5
+    - 2.5
+    - 2.5
     - 3.0
     min_velocity:
-    - -3.5
-    - -3.5
+    - -2.5
+    - -2.5
     - -3.0
     max_accel:
     - 4.0

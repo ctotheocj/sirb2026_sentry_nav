@@ -137,6 +137,7 @@ fake_vel_transform:
     allow_latest_tf_fallback: true
     tf_lookup_timeout_sec: 0.01
     stamped_cmd_timeout_sec: 0.12
+    max_latest_cmd_age_sec: 0.12
     cmd_spin_topic: "cmd_spin"
     init_spin_speed: 3.14
     use_nav_yaw: true
@@ -715,7 +716,6 @@ behavior_server:
       plugin: "nav2_behaviors/Spin"
     backup:
       plugin: "pb_nav2_behaviors/BackUpFreeSpace"
-      robot_radius: 0.3
       allow_escape_from_collision: true
       escape_collision_max_distance: 0.45
     drive_on_heading:
@@ -734,6 +734,7 @@ behavior_server:
     rotational_acc_lim: 3.2
     # params for pb_nav2_behaviors/BackUpFreeSpace
     service_name: "global_costmap/get_costmap"
+    robot_radius: 0.3
     max_radius: 2.0
     visualize: True
 
@@ -756,12 +757,12 @@ velocity_smoother:
     feedback: "OPEN_LOOP"
     max_velocity: [2.5, 2.5, 3.0]
     min_velocity: [-2.5, -2.5, -3.0]
-    max_accel: [3.0, 3.0, 5.0]
-    max_decel: [-3.0, -3.0, -5.0]
+    max_accel: [4.0, 4.0, 5.0]
+    max_decel: [-4.0, -4.0, -5.0]
     odom_topic: "odometry"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
-    velocity_timeout: 0.2
+    velocity_timeout: 1.0
 
 pb_teleop_twist_joy_node:
   ros__parameters:
