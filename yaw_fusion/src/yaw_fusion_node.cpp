@@ -41,6 +41,7 @@ public:
 
     // 最大允许预测时间（秒），超过此时间不再预测，防止 odom 长期丢失时的异常
     max_predict_dt_ = this->declare_parameter("max_predict_dt", 0.15);
+    debug_logging_ = this->declare_parameter("debug_logging", false);
     yaw_rate_enable_ = this->declare_parameter("yaw_rate.enable", true);
     v_yaw_sign_ = this->declare_parameter("yaw_rate.sign", 1.0);
     v_yaw_max_abs_ = this->declare_parameter("yaw_rate.max_abs", 12.0);
@@ -126,14 +127,18 @@ private:
     if (!odom_received_) {
       odom_received_ = true;
       fused_yaw_ = current_odom_yaw;
-      RCLCPP_INFO(this->get_logger(), "First odom received: yaw=%.2f deg",
-        current_odom_yaw * 180.0 / M_PI);
+      if (debug_logging_) {
+        RCLCPP_INFO(this->get_logger(), "First odom received: yaw=%.2f deg",
+          current_odom_yaw * 180.0 / M_PI);
+      }
     }
 
-    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-      "Odom: yaw=%.2f°, stamp_age=%.1f ms",
-      current_odom_yaw * 180.0 / M_PI,
-      (this->now() - current_time).seconds() * 1000.0);
+    if (debug_logging_) {
+      RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+        "Odom: yaw=%.2f°, stamp_age=%.1f ms",
+        current_odom_yaw * 180.0 / M_PI,
+        (this->now() - current_time).seconds() * 1000.0);
+    }
   }
 
   void vYawCallback(const std_msgs::msg::Float64::ConstSharedPtr msg)
@@ -175,16 +180,18 @@ private:
     double predicted_yaw = normalizeAngle(base_yaw + v_yaw * dt);
     fused_yaw_ = predicted_yaw;
 
-    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-      "fused: %.1f°, odom: %.1f°, v_yaw: %.2f°/s, valid: %s, age: %.1f ms, "
-      "dt: %.1f ms, predict_delta: %.2f°",
-      fused_yaw_ * 180.0 / M_PI,
-      base_yaw * 180.0 / M_PI,
-      v_yaw * 180.0 / M_PI,
-      v_yaw_valid ? "true" : "false",
-      v_yaw_age * 1000.0,
-      dt * 1000.0,
-      (v_yaw * dt) * 180.0 / M_PI);
+    if (debug_logging_) {
+      RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+        "fused: %.1f°, odom: %.1f°, v_yaw: %.2f°/s, valid: %s, age: %.1f ms, "
+        "dt: %.1f ms, predict_delta: %.2f°",
+        fused_yaw_ * 180.0 / M_PI,
+        base_yaw * 180.0 / M_PI,
+        v_yaw * 180.0 / M_PI,
+        v_yaw_valid ? "true" : "false",
+        v_yaw_age * 1000.0,
+        dt * 1000.0,
+        (v_yaw * dt) * 180.0 / M_PI);
+    }
 
     std_msgs::msg::Float64 msg;
     msg.data = fused_yaw_;
@@ -279,6 +286,7 @@ private:
 
   // 参数
   double max_predict_dt_;
+  bool debug_logging_;
   bool yaw_rate_enable_;
   double v_yaw_sign_;
   double v_yaw_max_abs_;

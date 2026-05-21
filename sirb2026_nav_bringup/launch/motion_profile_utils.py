@@ -33,6 +33,12 @@ def _set_xy(values, x, y, z):
     return result
 
 
+def _as_bool(value):
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
 def _read_pgm_size(image_path):
     with open(image_path, "rb") as f:
         magic = f.readline().strip()
@@ -139,6 +145,30 @@ def apply_motion_profile_to_dict(data):
         float(velocity.get("max_decel", [0.0, 0.0, 0.0])[2]))
 
 
+def apply_dynamic_obstacle_mode(data, enabled):
+    bt_nav = _node_params(data, "bt_navigator")
+    follow = _plugin_params(data, "controller_server", "FollowPath")
+    smoother = _plugin_params(data, "smoother_server", "safe_geometric_smoother")
+
+    bt_nav["use_dynamic_obstacles"] = enabled
+
+    follow["enable_dynamic_obstacle_avoidance"] = enabled
+    follow.setdefault("dynamic_obstacle_topic", "dynamic_obstacles")
+
+    smoother["dynamic_obstacle_enabled"] = enabled
+    smoother.setdefault("dynamic_obstacle_topic", "dynamic_obstacles")
+
+
+def apply_yaw_fusion_mode(data, enabled):
+    fake_vel = _node_params(data, "fake_vel_transform")
+    yaw_fusion = _node_params(data, "yaw_fusion")
+
+    fake_vel["use_nav_yaw"] = enabled
+    fake_vel.setdefault("nav_yaw_topic", "/Nav_yaw")
+
+    yaw_fusion.setdefault("debug_logging", False)
+
+
 def apply_launch_mode_guards(data, use_composition):
     if use_composition:
         return False
@@ -149,11 +179,25 @@ def apply_launch_mode_guards(data, use_composition):
     return True
 
 
-def prepare_motion_profile_params(context, params_file_config, label, map_file_config=None):
+def prepare_motion_profile_params(
+    context, params_file_config, label, map_file_config=None,
+    use_dynamic_obstacles_config=None, use_yaw_fusion_config=None):
     source = context.perform_substitution(params_file_config)
     with open(source, "r") as f:
         data = yaml.safe_load(f)
     apply_motion_profile_to_dict(data)
+    if use_dynamic_obstacles_config is not None:
+        use_dynamic_obstacles = _as_bool(
+            context.perform_substitution(use_dynamic_obstacles_config))
+    else:
+        use_dynamic_obstacles = _as_bool(
+            context.launch_configurations.get("use_dynamic_obstacles", False))
+    apply_dynamic_obstacle_mode(data, use_dynamic_obstacles)
+    if use_yaw_fusion_config is not None:
+        use_yaw_fusion = _as_bool(context.perform_substitution(use_yaw_fusion_config))
+    else:
+        use_yaw_fusion = _as_bool(context.launch_configurations.get("use_yaw_fusion", False))
+    apply_yaw_fusion_mode(data, use_yaw_fusion)
     use_composition = context.launch_configurations.get("use_composition", "False").lower() == "true"
     esdf_disabled = apply_launch_mode_guards(data, use_composition)
     map_yaml_path = ""
@@ -182,4 +226,6 @@ def prepare_motion_profile_params(context, params_file_config, label, map_file_c
         print(f"[motion_profile] grid_map bounds origin={origin} size={size}")
     if esdf_disabled:
         print("[motion_profile] use_composition=false; disabled smoother minco_use_esdf because GridMapRegistry is process-local")
+    print(f"[motion_profile] dynamic_obstacles enabled={use_dynamic_obstacles}")
+    print(f"[motion_profile] yaw_fusion enabled={use_yaw_fusion}")
     return []

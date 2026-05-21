@@ -51,6 +51,7 @@ namespace sirb_nav2_plugins
  *   Input "global_frame":            TF frame for robot pose, default "map"
  *   Input "robot_frame":             TF robot frame, default "base_footprint"
  *   Input "costmap_topic":           costmap topic for collision check
+ *   Input "use_dynamic_obstacles":   enable dynamic obstacle intersection check
  *   Input "dyn_obs_topic":           dynamic obstacles topic, default "/dynamic_obstacles"
  *   Input "timestamped_path_topic":  atomic path+timestamps topic, default "/GridBased/timestamped_path"
  *   Input "trajectory_status_topic": TrajectoryManager status topic, default "trajectory_manager/status"
@@ -82,6 +83,8 @@ public:
       BT::InputPort<std::string>("robot_frame", "base_footprint", "Robot TF frame"),
       BT::InputPort<std::string>("costmap_topic", "local_costmap/costmap_raw",
         "Costmap topic for forward collision check (use local for dynamic obstacles)"),
+      BT::InputPort<bool>("use_dynamic_obstacles",
+        "Enable dynamic obstacle trajectory intersection check"),
       BT::InputPort<std::string>("dyn_obs_topic", "dynamic_obstacles",
         "Dynamic obstacles topic (TrackedObstacleArray)"),
       BT::InputPort<std::string>("timestamped_path_topic", "GridBased/timestamped_path",

@@ -55,6 +55,7 @@ def generate_launch_description():
     use_robot_state_pub   = LaunchConfiguration("use_robot_state_pub")
     use_rviz              = LaunchConfiguration("use_rviz")
     use_yaw_fusion        = LaunchConfiguration("use_yaw_fusion")
+    use_dynamic_obstacles = LaunchConfiguration("use_dynamic_obstacles")
 
     declare_namespace_cmd = DeclareLaunchArgument(
         "namespace",
@@ -160,9 +161,19 @@ def generate_launch_description():
         ),
     )
 
+    declare_use_dynamic_obstacles_cmd = DeclareLaunchArgument(
+        "use_dynamic_obstacles",
+        default_value="False",
+        description=(
+            "Launch dynamic point detection/tracking and enable dynamic "
+            "obstacle constraints in MPC/smoother/BT when True."
+        ),
+    )
+
     prepare_motion_profile_cmd = OpaqueFunction(
         function=lambda context, *_: prepare_motion_profile_params(
-            context, params_file, "reality", map_yaml_file))
+            context, params_file, "reality", map_yaml_file,
+            use_dynamic_obstacles, use_yaw_fusion))
 
     configured_params = ParameterFile(
         RewrittenYaml(
@@ -235,6 +246,7 @@ def generate_launch_description():
         name="dynamic_obstacle_tracker",
         namespace=namespace,
         output="screen",
+        condition=IfCondition(use_dynamic_obstacles),
         parameters=[configured_params],
     )
 
@@ -253,6 +265,7 @@ def generate_launch_description():
         name="dynamic_point_detector",
         namespace=namespace,
         output="screen",
+        condition=IfCondition(use_dynamic_obstacles),
         parameters=[configured_params],
     )
 
@@ -306,6 +319,7 @@ def generate_launch_description():
     ld.add_action(declare_rviz_config_file_cmd)
     ld.add_action(declare_use_rviz_cmd)
     ld.add_action(declare_use_yaw_fusion_cmd)
+    ld.add_action(declare_use_dynamic_obstacles_cmd)
     ld.add_action(prepare_motion_profile_cmd)
 
     ld.add_action(start_robot_state_publisher_cmd)

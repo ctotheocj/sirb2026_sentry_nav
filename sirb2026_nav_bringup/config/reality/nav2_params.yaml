@@ -140,7 +140,8 @@ fake_vel_transform:
     max_latest_cmd_age_sec: 0.12
     cmd_spin_topic: "cmd_spin"
     init_spin_speed: 3.14
-    use_nav_yaw: true
+    use_nav_yaw: false
+    nav_yaw_topic: "/Nav_yaw"
 
 hole_pass_controller:
   ros__parameters:
@@ -354,6 +355,7 @@ bt_navigator:
     bt_loop_duration: 10
     default_server_timeout: 1000
     wait_for_service_timeout: 1000
+    use_dynamic_obstacles: false
     hole_pass:
       prepare_distance: 1.5
       exit_goal_offset: 0.4
@@ -508,7 +510,7 @@ controller_server:
       fallback_sample_speed: 0.8
       enable_goal_slowdown: True
       goal_slowdown_distance: 1.5
-      enable_dynamic_obstacle_avoidance: true
+      enable_dynamic_obstacle_avoidance: false
       dynamic_obstacle_topic: "dynamic_obstacles"
       dynamic_safety_margin: 0.3
       max_dynamic_obstacles: 5
@@ -819,6 +821,7 @@ pb_teleop_twist_joy_node:
 yaw_fusion:
   ros__parameters:
     odom_topic: "odometry"        
+    debug_logging: false
     max_predict_dt: 0.15          # 最大前向预测窗口 (s)，防止 odom 丢失时积分漂移
     yaw_rate:
       enable: True

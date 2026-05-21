@@ -59,6 +59,8 @@ BT::NodeStatus ReplanCondition::tick()
   double trajectory_status_max_age = 1.0;
   double traj_collision_radius = 0.5;
   double traj_lookahead_time = 2.0;
+  bool use_dynamic_obstacles = node_->has_parameter("use_dynamic_obstacles") &&
+    node_->get_parameter("use_dynamic_obstacles").as_bool();
 
   getInput("deviation_threshold", deviation_threshold);
   getInput("collision_cost_threshold", collision_cost_threshold);
@@ -70,6 +72,7 @@ BT::NodeStatus ReplanCondition::tick()
   getInput("global_frame", global_frame);
   getInput("robot_frame", robot_frame);
   getInput("dyn_obs_topic", dyn_obs_topic);
+  getInput("use_dynamic_obstacles", use_dynamic_obstacles);
   getInput("timestamped_path_topic", ts_path_topic);
   getInput("trajectory_status_topic", trajectory_status_topic);
   getInput("trajectory_status_max_age", trajectory_status_max_age);
@@ -93,7 +96,7 @@ BT::NodeStatus ReplanCondition::tick()
 
   // ---- Lazy dynamic obstacle subscription ----
   using ObsMsg = sentry_nav_interfaces::msg::TrackedObstacleArray;
-  if (!dyn_obs_sub_ || dyn_obs_topic_ != dyn_obs_topic) {
+  if (use_dynamic_obstacles && (!dyn_obs_sub_ || dyn_obs_topic_ != dyn_obs_topic)) {
     rclcpp::SubscriptionOptions sub_options;
     sub_options.callback_group = callback_group_;
     dyn_obs_sub_ = node_->create_subscription<ObsMsg>(
@@ -103,11 +106,15 @@ BT::NodeStatus ReplanCondition::tick()
         latest_dyn_obs_ = msg;
       }, sub_options);
     dyn_obs_topic_ = dyn_obs_topic;
+  } else if (!use_dynamic_obstacles && dyn_obs_sub_) {
+    dyn_obs_sub_.reset();
+    latest_dyn_obs_.reset();
+    dyn_obs_topic_.clear();
   }
 
   // ---- Lazy timestamped path subscription ----
   using TsPathMsg = sentry_nav_interfaces::msg::TimestampedPath;
-  if (!ts_path_sub_ || ts_path_topic_ != ts_path_topic) {
+  if (use_dynamic_obstacles && (!ts_path_sub_ || ts_path_topic_ != ts_path_topic)) {
     rclcpp::SubscriptionOptions sub_options;
     sub_options.callback_group = callback_group_;
     ts_path_sub_ = node_->create_subscription<TsPathMsg>(
@@ -117,6 +124,10 @@ BT::NodeStatus ReplanCondition::tick()
         latest_ts_path_ = msg;
       }, sub_options);
     ts_path_topic_ = ts_path_topic;
+  } else if (!use_dynamic_obstacles && ts_path_sub_) {
+    ts_path_sub_.reset();
+    latest_ts_path_.reset();
+    ts_path_topic_.clear();
   }
 
   // ---- Lazy trajectory status subscription ----
@@ -237,7 +248,7 @@ BT::NodeStatus ReplanCondition::tick()
   }
 
   // ---- Check 4: Spatio-temporal dynamic obstacle intersection ----
-  if (elapsed_s >= min_replan_period &&
+  if (use_dynamic_obstacles && elapsed_s >= min_replan_period &&
       checkDynamicObstacleIntersection(robot_x, robot_y, traj_collision_radius, traj_lookahead_time))
   {
     RCLCPP_INFO(

@@ -381,7 +381,7 @@ Visualization Manager:
       Use rainbow: false
       Value: true
     - Class: rviz_default_plugins/PointCloud2
-      Enabled: true
+      Enabled: false
       Name: DynamicCloud
       Topic:
         Depth: 5
@@ -389,9 +389,9 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Best Effort
         Value: vis/dynamic_cloud
-      Value: true
+      Value: false
     - Class: rviz_default_plugins/MarkerArray
-      Enabled: true
+      Enabled: false
       Name: TrackedObstacles
       Namespaces:
         {}
@@ -401,7 +401,7 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: vis/tracked_obstacles
-      Value: true
+      Value: false
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
