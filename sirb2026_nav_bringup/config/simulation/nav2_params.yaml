@@ -884,8 +884,6 @@ lidar_preprocessor:
     cell_min_points: 3
     obstacle_min_height: 0.02
     obstacle_max_height: 1.8
-    visualization_min_height: -0.2
-    visualization_max_height: 1.8
     enable_normal_check: true
     normal_min_neighbors: 5
     ground_normal_cos_thresh: 0.97
