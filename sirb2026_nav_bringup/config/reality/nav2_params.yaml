@@ -502,7 +502,7 @@ controller_server:
       reject_angle_deg: 180.0
       reject_dist_threshold: 2.0 # 距离终点阈值
       max_consecutive_rejects: 5
-      preserve_warm_start_on_similar_plan: true
+      preserve_warm_start_on_similar_plan: false
       similar_plan_goal_tolerance: 0.5
       similar_plan_anchor_tolerance: 0.5
       similar_plan_forward_distance: 1.5
@@ -530,7 +530,7 @@ local_costmap:
       height: 5
       resolution: 0.05
       robot_radius: 0.2
-      track_unknown_space: true
+      track_unknown_space: false
       plugins: ["static_layer", "occupancy_grid_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
@@ -546,7 +546,7 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 4.0
-        inflation_radius: 0.2
+        inflation_radius: 0.3
       always_send_full_costmap: True
 
 global_costmap:
@@ -891,25 +891,25 @@ grid_map_node:
     map:
       resolution: 0.10
       obstacles_inflation: 0.2
-      obstacles_inflation_xy: 0.2
-      obstacles_inflation_z: 0.0
+      obstacles_inflation_xy: 0.15
+      obstacles_inflation_z: 0.05
       frame_id: "map"
       local_map_margin: 10
       virtual_ceil_height: -1.0
       ground_height: 0.0
       origin: [-14.0, -8.0, -0.5]
       size: [28.0, 16.0, 2.0]
-      prob_hit_log: 0.70
-      prob_miss_log: -0.40
-      clamp_min_log: -2.0
-      clamp_max_log: 3.5
-      min_occupancy_log: 0.0
+      prob_hit_log: 1.60
+      prob_miss_log: -0.05
+      clamp_min_log: -1.0
+      clamp_max_log: 2.5
+      min_occupancy_log: -0.2
       min_ray_length: 0.1
       max_ray_length: 10.0
       pub_z_slice: 0.3
       occupancy_grid_project_all_z: true
-      occupancy_grid_min_z: 0.05
-      occupancy_grid_max_z: 1.20
+      occupancy_grid_min_z: 0.04
+      occupancy_grid_max_z: 0.80
       occupancy_grid_hold_enabled: true
       occupancy_grid_hold_time: 0.6
       occupancy_grid_debug: false
@@ -919,6 +919,6 @@ grid_map_node:
       cloud_topic: "obstacle_cloud"
       odom_topic: "odometry"
       transform_timeout_sec: 0.05
-      voxel_decay_time: 5.0
+      voxel_decay_time: 4.0
       enable_esdf: true
       enable_negative_esdf: true
