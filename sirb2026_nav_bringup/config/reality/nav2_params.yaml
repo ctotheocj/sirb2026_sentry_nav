@@ -647,6 +647,9 @@ smoother_server:
       minco_min_segment_time: 0.15
       minco_max_segment_time: 4.0
       minco_max_pieces: 60
+      minco_guide_fillet_enabled: true
+      minco_guide_fillet_radius: 0.60
+      minco_guide_fillet_min_angle: 0.25
       # Three-stage pipeline
       minco_phase0_enabled: true
       minco_phase0_max_iterations: 15

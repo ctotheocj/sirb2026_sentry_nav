@@ -84,6 +84,25 @@ TEST(MincoOptimizer, LShape)
   checkResult(res, output, input);
 }
 
+TEST(MincoOptimizer, LShapeUsesRoundedCornerGuide)
+{
+  auto opt = makeOptimizer();
+  auto input = makePath({{0,0},{1,0},{2,0},{2,1},{2,2},{2,3}});
+  nav_msgs::msg::Path output;
+  auto res = opt.smooth(input, output);
+  checkResult(res, output, input);
+
+  bool has_rounded_sample = false;
+  for (const auto & pose : output.poses) {
+    const auto & p = pose.pose.position;
+    if (p.x > 1.65 && p.x < 2.0 && p.y > 0.0 && p.y < 0.35) {
+      has_rounded_sample = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(has_rounded_sample);
+}
+
 TEST(MincoOptimizer, SShape)
 {
   auto opt = makeOptimizer();

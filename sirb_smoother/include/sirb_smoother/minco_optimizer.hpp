@@ -38,6 +38,9 @@ public:
     double sample_resolution{0.10};
     int max_pieces{80};
     bool use_lbfgs{true};
+    bool guide_fillet_enabled{true};
+    double guide_fillet_radius{0.60};
+    double guide_fillet_min_angle{0.25};
     double obstacle_cost_threshold{128.0};
     double obstacle_finite_diff_step{0.05};
     double obstacle_sample_dt{0.05};

@@ -229,6 +229,9 @@ void SafeGeometricSmoother::configure(  const rclcpp_lifecycle::LifecycleNode::W
   decl("minco_sample_resolution", 0.10);
   decl("minco_max_pieces", 80);
   decl("minco_use_lbfgs", true);
+  decl("minco_guide_fillet_enabled", true);
+  decl("minco_guide_fillet_radius", 0.60);
+  decl("minco_guide_fillet_min_angle", 0.25);
   decl("minco_obstacle_cost_threshold", 128.0);
   decl("minco_obstacle_finite_diff_step", 0.05);
   decl("minco_obstacle_sample_dt", 0.05);
@@ -313,6 +316,9 @@ void SafeGeometricSmoother::configure(  const rclcpp_lifecycle::LifecycleNode::W
   get("minco_sample_resolution", minco_options_.sample_resolution);
   get("minco_max_pieces", minco_options_.max_pieces);
   get("minco_use_lbfgs", minco_options_.use_lbfgs);
+  get("minco_guide_fillet_enabled", minco_options_.guide_fillet_enabled);
+  get("minco_guide_fillet_radius", minco_options_.guide_fillet_radius);
+  get("minco_guide_fillet_min_angle", minco_options_.guide_fillet_min_angle);
   get("minco_obstacle_cost_threshold", minco_options_.obstacle_cost_threshold);
   get("minco_obstacle_finite_diff_step", minco_options_.obstacle_finite_diff_step);
   get("minco_obstacle_sample_dt", minco_options_.obstacle_sample_dt);

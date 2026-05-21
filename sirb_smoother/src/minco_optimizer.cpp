@@ -168,13 +168,102 @@ bool MincoOptimizer::buildGuidePath(const nav_msgs::msg::Path & path, GuidePath 
   guide = GuidePath{};
   if (path.poses.size() < 2) {return false;}
 
-  guide.points.reserve(path.poses.size());
+  std::vector<Eigen::Vector3d> raw;
+  raw.reserve(path.poses.size());
   for (const auto & pose : path.poses) {
     const auto & p = pose.pose.position;
     Eigen::Vector3d point(p.x, p.y, p.z);
-    if (guide.points.empty() || (point - guide.points.back()).norm() > 1.0e-5) {
-      guide.points.push_back(point);
+    if (raw.empty() || (point - raw.back()).norm() > 1.0e-5) {
+      raw.push_back(point);
     }
+  }
+
+  if (raw.size() < 2) {return false;}
+
+  auto append_point = [&](const Eigen::Vector3d & point) {
+      if (guide.points.empty() || (point - guide.points.back()).norm() > 1.0e-5) {
+        guide.points.push_back(point);
+      }
+    };
+
+  if (!options_.guide_fillet_enabled || raw.size() < 3 ||
+    options_.guide_fillet_radius <= 1.0e-3)
+  {
+    guide.points = raw;
+  } else {
+    guide.points.reserve(raw.size() * 3);
+    append_point(raw.front());
+    for (size_t i = 1; i + 1 < raw.size(); ++i) {
+      const Eigen::Vector3d prev = raw[i - 1];
+      const Eigen::Vector3d cur = raw[i];
+      const Eigen::Vector3d next = raw[i + 1];
+      const Eigen::Vector3d in_vec = cur - prev;
+      const Eigen::Vector3d out_vec = next - cur;
+      const double len_in = in_vec.norm();
+      const double len_out = out_vec.norm();
+      if (len_in < 1.0e-4 || len_out < 1.0e-4) {
+        append_point(cur);
+        continue;
+      }
+
+      const Eigen::Vector3d d_in = in_vec / len_in;
+      const Eigen::Vector3d d_out = out_vec / len_out;
+      const double turn = std::acos(std::clamp(d_in.dot(d_out), -1.0, 1.0));
+      if (turn < options_.guide_fillet_min_angle || std::abs(M_PI - turn) < 1.0e-3) {
+        append_point(cur);
+        continue;
+      }
+
+      const double trim_by_radius = options_.guide_fillet_radius * std::tan(0.5 * turn);
+      const double trim = std::min({trim_by_radius, 0.45 * len_in, 0.45 * len_out});
+      if (trim < std::max(0.05, 0.5 * options_.sample_resolution)) {
+        append_point(cur);
+        continue;
+      }
+
+      const Eigen::Vector3d entry = cur - d_in * trim;
+      const Eigen::Vector3d exit = cur + d_out * trim;
+      append_point(entry);
+
+      const double sin_half = std::max(std::sin(0.5 * turn), 1.0e-6);
+      const double radius = trim / std::tan(0.5 * turn);
+      const Eigen::Vector2d d_in_xy = d_in.head<2>();
+      const Eigen::Vector2d d_out_xy = d_out.head<2>();
+      const double cross = d_in_xy.x() * d_out_xy.y() - d_in_xy.y() * d_out_xy.x();
+      if (std::abs(cross) < 1.0e-6 || sin_half <= 1.0e-6) {
+        append_point(exit);
+        continue;
+      }
+
+      const double side = cross >= 0.0 ? 1.0 : -1.0;
+      const Eigen::Vector2d left_normal(-d_in_xy.y(), d_in_xy.x());
+      const Eigen::Vector2d center = entry.head<2>() + side * radius * left_normal;
+
+      const double a0 = std::atan2(entry.y() - center.y(), entry.x() - center.x());
+      const double a1 = std::atan2(exit.y() - center.y(), exit.x() - center.x());
+      double delta = a1 - a0;
+      if (cross > 0.0 && delta < 0.0) {
+        delta += 2.0 * M_PI;
+      } else if (cross < 0.0 && delta > 0.0) {
+        delta -= 2.0 * M_PI;
+      }
+
+      const double arc_len = std::abs(delta) * radius;
+      const int arc_steps = std::clamp(
+        static_cast<int>(std::ceil(arc_len / std::max(options_.sample_resolution, 0.05))),
+        2, 12);
+      for (int s = 1; s < arc_steps; ++s) {
+        const double r = static_cast<double>(s) / static_cast<double>(arc_steps);
+        const double a = a0 + delta * r;
+        Eigen::Vector3d p;
+        p.x() = center.x() + radius * std::cos(a);
+        p.y() = center.y() + radius * std::sin(a);
+        p.z() = cur.z();
+        append_point(p);
+      }
+      append_point(exit);
+    }
+    append_point(raw.back());
   }
 
   if (guide.points.size() < 2) {return false;}
@@ -275,9 +364,6 @@ bool MincoOptimizer::buildWaypoints(
       target_samples > 1 ?
       guide.length * static_cast<double>(i) / static_cast<double>(target_samples - 1) : 0.0);
   }
-  for (size_t i = 0; i < guide.arc_lengths.size(); ++i) {
-    samples.push_back(guide.arc_lengths[i]);
-  }
   std::sort(samples.begin(), samples.end());
   samples.erase(
     std::unique(
@@ -289,36 +375,7 @@ bool MincoOptimizer::buildWaypoints(
     samples.end());
 
   if (static_cast<int>(samples.size()) > max_waypoints) {
-    const size_t interior_budget = static_cast<size_t>(std::max(0, max_waypoints - 2));
-    std::vector<std::pair<double, double>> turns;
-    turns.reserve(guide.points.size());
-    for (size_t i = 1; i + 1 < guide.points.size(); ++i) {
-      const double turn = anglePenalty(guide.points[i - 1], guide.points[i], guide.points[i + 1]);
-      if (turn > 0.15) {
-        turns.push_back({turn, guide.arc_lengths[i]});
-      }
-    }
-    std::sort(turns.begin(), turns.end(), [](const auto & a, const auto & b) {
-        return a.first > b.first;
-      });
-    const size_t turn_count = std::min(interior_budget, turns.size());
-    for (size_t i = 0; i < turn_count; ++i) {
-      samples.push_back(turns[i].second);
-    }
     std::vector<double> protected_samples{0.0, guide.length};
-    protected_samples.reserve(turn_count + 2);
-    for (size_t i = 0; i < turn_count; ++i) {
-      protected_samples.push_back(turns[i].second);
-    }
-    std::sort(samples.begin(), samples.end());
-    samples.erase(
-      std::unique(
-        samples.begin(), samples.end(),
-        [&](double a, double b) {
-          return std::abs(a - b) <
-            std::max(1.0e-5, 0.25 * std::max(options_.sample_resolution, 1.0e-3));
-        }),
-      samples.end());
     while (static_cast<int>(samples.size()) > max_waypoints) {
       size_t remove_idx = 0;
       double best_gap = std::numeric_limits<double>::infinity();

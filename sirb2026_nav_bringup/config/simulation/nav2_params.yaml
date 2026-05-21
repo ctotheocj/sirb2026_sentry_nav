@@ -642,6 +642,9 @@ smoother_server:
       minco_sample_resolution: 0.1
       minco_max_pieces: 60
       minco_use_lbfgs: true
+      minco_guide_fillet_enabled: true
+      minco_guide_fillet_radius: 0.60
+      minco_guide_fillet_min_angle: 0.25
       minco_use_esdf: true
       minco_esdf_safe_distance: 0.25
       minco_esdf_influence_distance: 0.8
