@@ -35,10 +35,12 @@ Default bringup sets `service_name: global_costmap/get_costmap`,
 
 ## OccupancyGridObstacleLayer
 
-`OccupancyGridObstacleLayer` stamps occupied cells from a `nav_msgs/msg/OccupancyGrid`
-into a Nav2 costmap without clearing free cells. In this workspace it consumes the online
-`occupancy_grid` published by `plan_env/grid_map_node`, so local and global costmaps can
-react to obstacle points from `lidar_preprocessor`.
+`OccupancyGridObstacleLayer` stamps occupied cells from the latest full
+`nav_msgs/msg/OccupancyGrid` snapshot into a Nav2 costmap. In this workspace it consumes
+the online `occupancy_grid` published by `plan_env/grid_map_node`, so local and global
+costmaps can react to obstacle points from `lidar_preprocessor`. The layer treats each
+incoming grid as a full state snapshot: cells absent from the newest occupied set are
+cleared by reporting both previous and current occupied bounds to Nav2's update cycle.
 
 The layer also exposes:
 
@@ -54,7 +56,7 @@ through configured holes.
 | `enabled` | `true` | Enable stamping cached occupied cells |
 | `topic` | `occupancy_grid` | Occupancy grid input |
 | `occupied_threshold` | `65` | Occupancy value treated as lethal |
-| `obstacle_keep_time` | `0.35` | Cached occupied-cell lifetime |
+| `source_timeout` | `0.6` | Mark the layer non-current when the input snapshot is stale; does not clear the last valid snapshot |
 | `stamp_source_cell_area` | `true` | Stamp the source grid cell area instead of only the center |
 | `debug_logging` | `false` | Throttled layer diagnostics |
 

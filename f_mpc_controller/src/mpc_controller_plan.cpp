@@ -242,7 +242,7 @@ void MpcController::setPlan(const nav_msgs::msg::Path & path)
       RCLCPP_INFO_THROTTLE(node->get_logger(), *clock_, 1000,
         "setPlan: similar path accepted, preserving MPC warm start");
     }
-    mpc_->setLastExecutedU(last_ux, last_uy);
+    mpc_->setControlAnchorU(last_ux, last_uy);
   }  // plan_mutex_ released
 }
 double MpcController::computeLateralError(

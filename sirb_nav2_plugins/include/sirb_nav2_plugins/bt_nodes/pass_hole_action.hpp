@@ -33,6 +33,8 @@ public:
         BT::InputPort<std::string>("entry_port", "", "Entry port name"),
         BT::InputPort<geometry_msgs::msg::PoseStamped>("entry_pose", "Entry pose"),
         BT::InputPort<geometry_msgs::msg::PoseStamped>("exit_pose", "Exit pose"),
+        BT::InputPort<geometry_msgs::msg::PolygonStamped>("entry_polygon", "Entry port polygon"),
+        BT::InputPort<geometry_msgs::msg::PolygonStamped>("exit_polygon", "Exit port polygon"),
         BT::InputPort<geometry_msgs::msg::PolygonStamped>("corridor", "Hole corridor"),
         BT::InputPort<double>("timeout_sec", 8.0, "Pass hole timeout"),
         BT::OutputPort<std::string>("reason", "Result reason"),

@@ -220,6 +220,7 @@ void SafeGeometricSmoother::configure(  const rclcpp_lifecycle::LifecycleNode::W
   decl("resample_resolution", 0.20);
   decl("max_shortcut_dist", 2.0);
   decl("max_shortcut_skip", 30);
+  decl("min_clearance_for_removal", 0.25);
   decl("use_minco", false);
   decl("minco_v_ref", 1.5);
   decl("minco_min_segment_time", 0.15);
@@ -228,10 +229,6 @@ void SafeGeometricSmoother::configure(  const rclcpp_lifecycle::LifecycleNode::W
   decl("minco_sample_resolution", 0.10);
   decl("minco_max_pieces", 80);
   decl("minco_use_lbfgs", true);
-  decl("minco_max_iterations", 60);
-  decl("minco_w_energy", 1.0);
-  decl("minco_w_reference", 10.0);
-  decl("minco_w_obstacle", 2.0);
   decl("minco_obstacle_cost_threshold", 128.0);
   decl("minco_obstacle_finite_diff_step", 0.05);
   decl("minco_obstacle_sample_dt", 0.05);
@@ -307,6 +304,7 @@ void SafeGeometricSmoother::configure(  const rclcpp_lifecycle::LifecycleNode::W
   get("resample_resolution", resample_resolution_);
   get("max_shortcut_dist", max_shortcut_dist_);
   get("max_shortcut_skip", max_shortcut_skip_);
+  get("min_clearance_for_removal", min_clearance_for_removal_);
   get("use_minco", use_minco_);
   get("minco_v_ref", minco_options_.v_ref);
   get("minco_min_segment_time", minco_options_.min_segment_time);
@@ -315,10 +313,6 @@ void SafeGeometricSmoother::configure(  const rclcpp_lifecycle::LifecycleNode::W
   get("minco_sample_resolution", minco_options_.sample_resolution);
   get("minco_max_pieces", minco_options_.max_pieces);
   get("minco_use_lbfgs", minco_options_.use_lbfgs);
-  get("minco_max_iterations", minco_options_.max_iterations);
-  get("minco_w_energy", minco_options_.w_energy);
-  get("minco_w_reference", minco_options_.w_reference);
-  get("minco_w_obstacle", minco_options_.w_obstacle);
   get("minco_obstacle_cost_threshold", minco_options_.obstacle_cost_threshold);
   get("minco_obstacle_finite_diff_step", minco_options_.obstacle_finite_diff_step);
   get("minco_obstacle_sample_dt", minco_options_.obstacle_sample_dt);
@@ -374,6 +368,7 @@ void SafeGeometricSmoother::configure(  const rclcpp_lifecycle::LifecycleNode::W
 
   minco_options_.enabled = use_minco_;
   minco_options_.allow_unknown = allow_unknown_;
+  min_clearance_for_removal_ = std::max(0.0, min_clearance_for_removal_);
   minco_optimizer_.setOptions(minco_options_);
 
   if (minco_options_.v_ref > minco_options_.v_max) {
@@ -499,6 +494,42 @@ bool SafeGeometricSmoother::acquireEsdfMap(const char * reason, bool warn_on_fai
       name_.c_str(), reason);
   }
   return false;
+}
+
+bool SafeGeometricSmoother::buildSafeReferenceFallback(
+  const nav_msgs::msg::Path & reference_path,
+  const nav_msgs::msg::Path & geometry_baseline,
+  const nav2_costmap_2d::Costmap2D & costmap,
+  const Footprint & footprint,
+  MincoOptimizer::Result & result,
+  nav_msgs::msg::Path & candidate,
+  std::string & diagnostic) const
+{
+  diagnostic.clear();
+  candidate = reference_path;
+  if (!minco_optimizer_.buildReferenceTrajectory(reference_path, result, candidate, &diagnostic)) {
+    if (diagnostic.empty()) {
+      diagnostic = "reference trajectory build failed";
+    }
+    return false;
+  }
+
+  std::string geometry_reason;
+  if (!smoothedGeometryReasonable(geometry_baseline, candidate, geometry_reason)) {
+    diagnostic = "reference trajectory bad geometry: " + geometry_reason;
+    return false;
+  }
+
+  const bool safe_with_footprint = isPathSafe(candidate, costmap, footprint);
+  const bool safe_centerline =
+    use_footprint_collision_check_ && isPathSafe(candidate, costmap, Footprint{});
+  if (!safe_with_footprint && !safe_centerline) {
+    diagnostic = "reference trajectory unsafe";
+    return false;
+  }
+
+  updateOrientations(candidate);
+  return true;
 }
 
 rclcpp_action::GoalResponse SafeGeometricSmoother::handleGenerateGoal(
@@ -816,7 +847,7 @@ bool SafeGeometricSmoother::tryReuseCachedTrajectory(
 
 bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Duration & max_time)
 {
-  if (!enabled_ || path.poses.size() < 3) {return true;}
+  if (!enabled_ || path.poses.size() < 2) {return true;}
 
   has_last_candidate_minco_ = false;
 
@@ -853,6 +884,7 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
 
   const rclcpp::Time start_time = clock_->now();
   nav_msgs::msg::Path candidate = input_path;
+  nav_msgs::msg::Path minco_reference_path = input_path;
   MincoOptimizer::Result minco_result;
 
   if (use_minco_) {
@@ -860,7 +892,10 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
       RCLCPP_WARN_THROTTLE(logger_, *clock_, 10000,
         "%s: use_esdf=true but esdf_map_ is null, falling back to costmap", name_.c_str());
     }
-    nav_msgs::msg::Path minco_candidate = input_path;
+    if (do_shortcut_) {
+      minco_reference_path =
+        shortcutPath(minco_reference_path, *costmap, footprint, start_time, max_time);
+    }
 
     // 目标变化较大时清空旧轨迹缓存。
     const Eigen::Vector3d new_goal(
@@ -870,7 +905,7 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
     cached_goal_ = new_goal;
 
     // 尝试把旧轨迹可执行前段拼接到新候选路径。
-    const bool stitched = enable_stitching_ && tryStitchPath(minco_candidate);
+    const bool stitched = enable_stitching_ && tryStitchPath(minco_reference_path);
 
     std::vector<DynamicObstacle> local_obs;
     {
@@ -890,8 +925,9 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
         return false;
       };
 
+    nav_msgs::msg::Path minco_candidate = minco_reference_path;
     minco_result = minco_optimizer_.smooth(
-      minco_candidate, minco_candidate, costmap.get(), obs_ptr, &should_cancel);
+      minco_reference_path, minco_candidate, costmap.get(), obs_ptr, &should_cancel);
     const double minco_ms = (clock_->now() - start_time).nanoseconds() * 1.0e-6;
 
     if (should_cancel()) {
@@ -904,19 +940,12 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
       }
 
       MincoOptimizer::Result reference_result;
-      nav_msgs::msg::Path reference_candidate = input_path;
+      nav_msgs::msg::Path reference_candidate;
       std::string fallback_diag;
-      const bool fallback_built = minco_optimizer_.buildReferenceTrajectory(
-        input_path, reference_result, reference_candidate, &fallback_diag);
-      std::string fallback_geometry_reason;
-      const bool fallback_geometry_ok = fallback_built &&
-        smoothedGeometryReasonable(input_path, reference_candidate, fallback_geometry_reason);
-      const bool fallback_safe = fallback_built &&
-        fallback_geometry_ok &&
-        (isPathSafe(reference_candidate, *costmap, footprint) ||
-        (use_footprint_collision_check_ && isPathSafe(reference_candidate, *costmap, Footprint{})));
-      if (fallback_built && fallback_safe) {
-        updateOrientations(reference_candidate);
+      if (buildSafeReferenceFallback(
+          minco_reference_path, minco_reference_path, *costmap, footprint,
+          reference_result, reference_candidate, fallback_diag))
+      {
         candidate = reference_candidate;
         minco_result = reference_result;
         product = LocalTrajectoryProduct::NEW_MINCO;
@@ -928,11 +957,6 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
           minco_ms, minco_result.traj_duration, minco_result.max_velocity,
           minco_result.max_acceleration);
       } else {
-        if (fallback_built && fallback_diag.empty()) {
-          fallback_diag = fallback_geometry_ok ?
-            "reference trajectory unsafe" :
-            "reference trajectory bad geometry: " + fallback_geometry_reason;
-        }
         RCLCPP_WARN(
           logger_, "MINCO timeout fallback failed after %.1fms: %s",
           minco_ms, fallback_diag.c_str());
@@ -994,20 +1018,12 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
     if (debug_publish_) {publishRejectedPath(candidate); publishCollisionMarkers(col, candidate.header);}
     if (product == LocalTrajectoryProduct::NEW_MINCO) {
       MincoOptimizer::Result reference_result;
-      nav_msgs::msg::Path reference_candidate = input_path;
+      nav_msgs::msg::Path reference_candidate;
       std::string fallback_diag;
-      const bool fallback_built = minco_optimizer_.buildReferenceTrajectory(
-        input_path, reference_result, reference_candidate, &fallback_diag);
-      std::string fallback_geometry_reason;
-      const bool fallback_geometry_ok = fallback_built &&
-        smoothedGeometryReasonable(input_path, reference_candidate, fallback_geometry_reason);
-      const bool fallback_safe = fallback_built &&
-        fallback_geometry_ok &&
-        (isPathSafe(reference_candidate, *costmap, footprint) ||
-        (use_footprint_collision_check_ && isPathSafe(reference_candidate, *costmap, Footprint{})));
-      if (fallback_built && fallback_safe)
+      if (buildSafeReferenceFallback(
+          minco_reference_path, minco_reference_path, *costmap, footprint,
+          reference_result, reference_candidate, fallback_diag))
       {
-        updateOrientations(reference_candidate);
         candidate = reference_candidate;
         minco_result = reference_result;
         RCLCPP_WARN(
@@ -1017,11 +1033,6 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
           minco_result.traj_duration, minco_result.max_velocity,
           minco_result.max_acceleration, col.size());
       } else {
-        if (fallback_built && fallback_diag.empty()) {
-          fallback_diag = fallback_geometry_ok ?
-            "reference trajectory unsafe" :
-            "reference trajectory bad geometry: " + fallback_geometry_reason;
-        }
         RCLCPP_WARN(
           logger_, "MINCO collision fallback failed: %s", fallback_diag.c_str());
         return false;
@@ -1076,20 +1087,12 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
         return false;
       }
       MincoOptimizer::Result reference_result;
-      nav_msgs::msg::Path reference_candidate = input_path;
+      nav_msgs::msg::Path reference_candidate;
       std::string fallback_diag;
-      const bool fallback_built = minco_optimizer_.buildReferenceTrajectory(
-        input_path, reference_result, reference_candidate, &fallback_diag);
-      std::string fallback_geometry_reason;
-      const bool fallback_geometry_ok = fallback_built &&
-        smoothedGeometryReasonable(input_path, reference_candidate, fallback_geometry_reason);
-      const bool fallback_safe = fallback_built &&
-        fallback_geometry_ok &&
-        (isPathSafe(reference_candidate, *costmap, footprint) ||
-        (use_footprint_collision_check_ && isPathSafe(reference_candidate, *costmap, Footprint{})));
-      if (fallback_built && fallback_safe)
+      if (buildSafeReferenceFallback(
+          minco_reference_path, minco_reference_path, *costmap, footprint,
+          reference_result, reference_candidate, fallback_diag))
       {
-        updateOrientations(reference_candidate);
         candidate = reference_candidate;
         minco_result = reference_result;
         RCLCPP_WARN(
@@ -1099,11 +1102,6 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
           minco_result.traj_duration, minco_result.max_velocity,
           minco_result.max_acceleration);
       } else {
-        if (fallback_built && fallback_diag.empty()) {
-          fallback_diag = fallback_geometry_ok ?
-            "reference trajectory unsafe" :
-            "reference trajectory bad geometry: " + fallback_geometry_reason;
-        }
         RCLCPP_WARN(
           logger_, "MINCO geometry fallback failed: %s", fallback_diag.c_str());
         return false;
@@ -1222,6 +1220,108 @@ bool SafeGeometricSmoother::isPoseSafe(
   return c < collision_cost_threshold_;
 }
 
+double SafeGeometricSmoother::poseClearance(
+  const geometry_msgs::msg::PoseStamped & pose,
+  const nav2_costmap_2d::Costmap2D & costmap,
+  const Footprint & footprint) const
+{
+  if (!isPoseSafe(pose, costmap, footprint)) {
+    return -std::numeric_limits<double>::infinity();
+  }
+
+  double footprint_radius = 0.0;
+  if (use_footprint_collision_check_ && !footprint.empty()) {
+    for (const auto & p : footprint) {
+      footprint_radius = std::max(footprint_radius, std::hypot(p.x, p.y));
+    }
+  }
+
+  if (minco_options_.use_esdf && esdf_map_) {
+    const double d = esdf_map_->getDistance2D(
+      pose.pose.position.x, pose.pose.position.y, minco_options_.esdf_query_z);
+    if (std::isfinite(d) && d > -1.0e5) {
+      return d - footprint_radius;
+    }
+  }
+
+  unsigned int mx = 0, my = 0;
+  if (!costmap.worldToMap(pose.pose.position.x, pose.pose.position.y, mx, my)) {
+    return -std::numeric_limits<double>::infinity();
+  }
+
+  const unsigned int sx = costmap.getSizeInCellsX();
+  const unsigned int sy = costmap.getSizeInCellsY();
+  const double res = costmap.getResolution();
+  const int max_cells = std::max(
+    1, static_cast<int>(std::ceil(std::max(min_clearance_for_removal_, res) / res)));
+
+  for (int r = 0; r <= max_cells; ++r) {
+    bool has_free_unknown = false;
+    for (int dy = -r; dy <= r; ++dy) {
+      for (int dx = -r; dx <= r; ++dx) {
+        if (std::max(std::abs(dx), std::abs(dy)) != r) {continue;}
+        const int cx = static_cast<int>(mx) + dx;
+        const int cy = static_cast<int>(my) + dy;
+        if (cx < 0 || cy < 0 || cx >= static_cast<int>(sx) || cy >= static_cast<int>(sy)) {
+          return static_cast<double>(r) * res - footprint_radius;
+        }
+        const unsigned char c = costmap.getCost(
+          static_cast<unsigned int>(cx), static_cast<unsigned int>(cy));
+        if (c == nav2_costmap_2d::NO_INFORMATION) {
+          if (!allow_unknown_) {
+            return static_cast<double>(r) * res - footprint_radius;
+          }
+          has_free_unknown = true;
+          continue;
+        }
+        if (c != nav2_costmap_2d::FREE_SPACE || c >= collision_cost_threshold_) {
+          return static_cast<double>(r) * res - footprint_radius;
+        }
+      }
+    }
+    if (r == max_cells && has_free_unknown) {
+      return static_cast<double>(max_cells) * res - footprint_radius;
+    }
+  }
+  return static_cast<double>(max_cells) * res - footprint_radius;
+}
+
+double SafeGeometricSmoother::segmentClearance(
+  const geometry_msgs::msg::PoseStamped & from,
+  const geometry_msgs::msg::PoseStamped & to,
+  const nav2_costmap_2d::Costmap2D & costmap,
+  const Footprint & footprint) const
+{
+  const double dist = distance(from, to);
+  const int steps = std::max(
+    1, static_cast<int>(std::ceil(dist / std::max(collision_check_step_, 1.0e-3))));
+  double min_clearance = std::numeric_limits<double>::infinity();
+  geometry_msgs::msg::Quaternion seg_q = from.pose.orientation;
+  if (use_footprint_collision_check_ && !footprint.empty()) {
+    tf2::Quaternion q;
+    q.setRPY(
+      0, 0, std::atan2(
+        to.pose.position.y - from.pose.position.y,
+        to.pose.position.x - from.pose.position.x));
+    seg_q = tf2::toMsg(q);
+  }
+  for (int i = 0; i <= steps; ++i) {
+    auto p = interpolate(from, to, static_cast<double>(i) / static_cast<double>(steps));
+    p.pose.orientation = seg_q;
+    min_clearance = std::min(min_clearance, poseClearance(p, costmap, footprint));
+  }
+  return min_clearance;
+}
+
+bool SafeGeometricSmoother::isSegmentClear(
+  const geometry_msgs::msg::PoseStamped & from,
+  const geometry_msgs::msg::PoseStamped & to,
+  const nav2_costmap_2d::Costmap2D & costmap,
+  const Footprint & footprint) const
+{
+  return segmentClearance(from, to, costmap, footprint) >= min_clearance_for_removal_;
+}
+
 nav_msgs::msg::Path SafeGeometricSmoother::shortcutPath(
   const nav_msgs::msg::Path & path, const nav2_costmap_2d::Costmap2D & costmap,
   const Footprint & footprint,
@@ -1237,7 +1337,7 @@ nav_msgs::msg::Path SafeGeometricSmoother::shortcutPath(
     const size_t max_j = std::min(path.poses.size()-1, i + static_cast<size_t>(std::max(1, max_shortcut_skip_)));
     for (size_t j = max_j; j > i + 1; --j) {
       if (distance(path.poses[i], path.poses[j]) > max_shortcut_dist_) {continue;}
-      if (isSegmentSafe(path.poses[i], path.poses[j], costmap, footprint)) {best = j; break;}
+      if (isSegmentClear(path.poses[i], path.poses[j], costmap, footprint)) {best = j; break;}
     }
     out.poses.push_back(path.poses[best]);
     i = best;
@@ -1342,15 +1442,6 @@ std::vector<geometry_msgs::msg::PoseStamped> SafeGeometricSmoother::collectColli
   return result;
 }
 
-void SafeGeometricSmoother::publishMpcTrajectory(
-  const MincoOptimizer::Result & result, const std_msgs::msg::Header & header) const
-{
-  if (!mpc_traj_pub_ || result.optimized_waypoints.empty()) {return;}
-  const auto msg = makeMpcTrajectory(result, header);
-  if (msg.waypoints.size() < 2 || msg.segment_times.empty()) {return;}
-  mpc_traj_pub_->publish(msg);
-}
-
 sentry_nav_interfaces::msg::MincoTrajectory SafeGeometricSmoother::makeMpcTrajectory(
   const MincoOptimizer::Result & result, const std_msgs::msg::Header & header) const
 {
@@ -1371,14 +1462,6 @@ sentry_nav_interfaces::msg::MincoTrajectory SafeGeometricSmoother::makeMpcTrajec
   msg.initial_acceleration.y = result.initial_acceleration.y();
   msg.initial_acceleration.z = result.initial_acceleration.z();
   return msg;
-}
-
-void SafeGeometricSmoother::publishCachedMpcTrajectory(const std_msgs::msg::Header & header) const
-{
-  if (!mpc_traj_pub_) {return;}
-  const auto msg = makeCachedMpcTrajectory(header);
-  if (msg.waypoints.size() < 2 || msg.segment_times.empty()) {return;}
-  mpc_traj_pub_->publish(msg);
 }
 
 sentry_nav_interfaces::msg::MincoTrajectory SafeGeometricSmoother::makeCachedMpcTrajectory(

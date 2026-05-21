@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "nav2_costmap_2d/cost_values.hpp"
 
@@ -36,14 +37,20 @@ MincoOptimizer::Result MincoOptimizer::smooth(
 {
   Result result;
   output = input;
-  if (!options_.enabled || input.poses.size() < 3) {
+  if (!options_.enabled || input.poses.size() < 2) {
     result.reason = "disabled or too few poses";
+    return result;
+  }
+
+  GuidePath guide;
+  if (!buildGuidePath(input, guide)) {
+    result.reason = "buildGuidePath failed";
     return result;
   }
 
   std::vector<Eigen::Vector3d> points;
   Eigen::VectorXd times;
-  if (!buildWaypoints(input, points, times) || points.size() < 2) {
+  if (!buildWaypoints(guide, points, times) || points.size() < 2) {
     result.reason = "buildWaypoints failed";
     return result;
   }
@@ -61,7 +68,7 @@ MincoOptimizer::Result MincoOptimizer::smooth(
     if (options_.phase0_enabled) {
       double phase0_cost = 0.0;
       optimizeWaypoints(
-        points, times, costmap, dynamic_obstacles,
+        points, guide, times, costmap, dynamic_obstacles,
         options_.phase0_w_energy, options_.phase0_w_reference, options_.phase0_w_obstacle,
         options_.phase0_max_iterations, phase0_cost, false, should_cancel);
       if (should_cancel && (*should_cancel)()) {
@@ -70,24 +77,13 @@ MincoOptimizer::Result MincoOptimizer::smooth(
       }
 
       // 粗优化后按新几何形状重新分配时间。
-      for (size_t i = 0; i + 1 < points.size(); ++i) {
-        const Eigen::Vector3d & prev = i == 0 ? points[i] : points[i - 1];
-        times(static_cast<int>(i)) = segmentTime(prev, points[i], points[i + 1]);
-      }
-      if (times.size() > 2) {
-        for (int iter = 0; iter < 3; ++iter) {
-          Eigen::VectorXd smoothed = times;
-          for (int i = 1; i < times.size() - 1; ++i) {
-            smoothed(i) = 0.5 * times(i) + 0.25 * (times(i - 1) + times(i + 1));
-          }
-          times = smoothed;
-        }
-      }
+      assignSegmentTimes(points, times);
+      smoothSegmentTimes(times);
     }
 
     // 预优化强跟随参考路径，避免狭窄区域被过早推出。
     result.pre_ret = optimizeWaypoints(
-      points, times, costmap, dynamic_obstacles,
+      points, guide, times, costmap, dynamic_obstacles,
       options_.pre_w_energy, options_.pre_w_reference, options_.pre_w_obstacle,
       options_.pre_max_iterations, result.pre_cost, false, should_cancel);
     if (should_cancel && (*should_cancel)()) {
@@ -108,25 +104,13 @@ MincoOptimizer::Result MincoOptimizer::smooth(
       return result;
     }
 
-    for (size_t i = 0; i + 1 < points.size(); ++i) {
-      const Eigen::Vector3d & prev = i == 0 ? points[i] : points[i - 1];
-      times(static_cast<int>(i)) = segmentTime(prev, points[i], points[i + 1]);
-    }
-
-    if (times.size() > 2) {
-      for (int iter = 0; iter < 3; ++iter) {
-        Eigen::VectorXd smoothed = times;
-        for (int i = 1; i < times.size() - 1; ++i) {
-          smoothed(i) = 0.5 * times(i) + 0.25 * (times(i - 1) + times(i + 1));
-        }
-        times = smoothed;
-      }
-    }
+    assignSegmentTimes(points, times);
+    smoothSegmentTimes(times);
 
     // 精优化强化动力学平滑并联合调整时间。
     std::vector<Eigen::Vector3d> fine_points = points;
     result.fine_ret = optimizeWaypoints(
-      fine_points, times, costmap, dynamic_obstacles,
+      fine_points, guide, times, costmap, dynamic_obstacles,
       options_.fine_w_energy, options_.fine_w_reference, options_.fine_w_obstacle,
       options_.fine_max_iterations, result.fine_cost, true, should_cancel);
     if (should_cancel && (*should_cancel)()) {
@@ -179,99 +163,210 @@ MincoOptimizer::Result MincoOptimizer::smooth(
   return result;
 }
 
+bool MincoOptimizer::buildGuidePath(const nav_msgs::msg::Path & path, GuidePath & guide) const
+{
+  guide = GuidePath{};
+  if (path.poses.size() < 2) {return false;}
+
+  guide.points.reserve(path.poses.size());
+  for (const auto & pose : path.poses) {
+    const auto & p = pose.pose.position;
+    Eigen::Vector3d point(p.x, p.y, p.z);
+    if (guide.points.empty() || (point - guide.points.back()).norm() > 1.0e-5) {
+      guide.points.push_back(point);
+    }
+  }
+
+  if (guide.points.size() < 2) {return false;}
+
+  guide.arc_lengths.reserve(guide.points.size());
+  guide.arc_lengths.push_back(0.0);
+  for (size_t i = 1; i < guide.points.size(); ++i) {
+    guide.length += (guide.points[i] - guide.points[i - 1]).norm();
+    guide.arc_lengths.push_back(guide.length);
+  }
+  return guide.length > 1.0e-6;
+}
+
+Eigen::Vector3d MincoOptimizer::guidePointAt(const GuidePath & guide, double arc_s) const
+{
+  if (guide.points.empty()) {return Eigen::Vector3d::Zero();}
+  if (guide.points.size() == 1 || guide.length <= 1.0e-9) {return guide.points.front();}
+  const double s = std::clamp(arc_s, 0.0, guide.length);
+  auto it = std::lower_bound(guide.arc_lengths.begin(), guide.arc_lengths.end(), s);
+  if (it == guide.arc_lengths.begin()) {return guide.points.front();}
+  if (it == guide.arc_lengths.end()) {return guide.points.back();}
+  const size_t hi = static_cast<size_t>(std::distance(guide.arc_lengths.begin(), it));
+  const size_t lo = hi - 1;
+  const double ds = guide.arc_lengths[hi] - guide.arc_lengths[lo];
+  const double r = ds > 1.0e-9 ? (s - guide.arc_lengths[lo]) / ds : 0.0;
+  return guide.points[lo] + r * (guide.points[hi] - guide.points[lo]);
+}
+
+MincoOptimizer::GuideProjection MincoOptimizer::projectToGuide(
+  const GuidePath & guide, const Eigen::Vector3d & point, double hint_s,
+  double search_radius) const
+{
+  GuideProjection best;
+  if (guide.points.size() < 2 || guide.arc_lengths.size() != guide.points.size()) {
+    return best;
+  }
+
+  const double radius = std::max(search_radius, options_.sample_resolution);
+  const double begin_s = std::max(0.0, hint_s - radius);
+  const double end_s = std::min(guide.length, hint_s + radius);
+  auto begin_it = std::upper_bound(guide.arc_lengths.begin(), guide.arc_lengths.end(), begin_s);
+  size_t begin_idx = begin_it == guide.arc_lengths.begin() ? 0 :
+    static_cast<size_t>(std::distance(guide.arc_lengths.begin(), begin_it) - 1);
+  auto end_it = std::lower_bound(guide.arc_lengths.begin(), guide.arc_lengths.end(), end_s);
+  size_t end_idx = end_it == guide.arc_lengths.end() ? guide.points.size() - 1 :
+    static_cast<size_t>(std::distance(guide.arc_lengths.begin(), end_it));
+  begin_idx = std::min(begin_idx, guide.points.size() - 2);
+  end_idx = std::min(std::max(end_idx, begin_idx + 1), guide.points.size() - 1);
+
+  best.distance_sq = std::numeric_limits<double>::infinity();
+  auto scan_segment = [&](size_t i) {
+      const Eigen::Vector3d a = guide.points[i];
+      const Eigen::Vector3d b = guide.points[i + 1];
+      const Eigen::Vector3d ab = b - a;
+      const double len_sq = ab.squaredNorm();
+      const double u = len_sq > 1.0e-12 ?
+        std::clamp((point - a).dot(ab) / len_sq, 0.0, 1.0) : 0.0;
+      const Eigen::Vector3d q = a + u * ab;
+      const double d_sq = (point - q).squaredNorm();
+      if (d_sq < best.distance_sq) {
+        best.point = q;
+        best.distance_sq = d_sq;
+        best.valid = true;
+      }
+    };
+
+  for (size_t i = begin_idx; i < end_idx; ++i) {
+    scan_segment(i);
+  }
+
+  if (!best.valid) {
+    for (size_t i = 0; i + 1 < guide.points.size(); ++i) {
+      scan_segment(i);
+    }
+  }
+  return best;
+}
+
 bool MincoOptimizer::buildWaypoints(
-  const nav_msgs::msg::Path & path, std::vector<Eigen::Vector3d> & points,
+  const GuidePath & guide, std::vector<Eigen::Vector3d> & points,
   Eigen::VectorXd & times) const
 {
   points.clear();
-  if (path.poses.size() < 2) {return false;}
+  if (guide.points.size() < 2 || guide.length <= 1.0e-6) {return false;}
 
-  std::vector<Eigen::Vector3d> all;
-  all.reserve(path.poses.size());
-  for (const auto & pose : path.poses) {
-    const auto & p = pose.pose.position;
-    all.emplace_back(p.x, p.y, p.z);
-  }
-
-  std::vector<bool> is_turn(all.size(), false);
-  is_turn[0] = true;
-  is_turn[all.size() - 1] = true;
-  for (size_t i = 1; i + 1 < all.size(); ++i) {
-    const Eigen::Vector3d a = all[i] - all[i - 1];
-    const Eigen::Vector3d b = all[i + 1] - all[i];
-    if (a.norm() > 1.0e-6 && b.norm() > 1.0e-6) {
-      const double cos_a = std::clamp(a.normalized().dot(b.normalized()), -1.0, 1.0);
-      if (std::acos(cos_a) > 0.3) {is_turn[i] = true;}
-    }
-  }
-
-  std::vector<size_t> turns;
-  for (size_t i = 0; i < all.size(); ++i) {
-    if (is_turn[i]) {turns.push_back(i);}
-  }
-
-  double raw_length = 0.0;
-  for (size_t i = 1; i < all.size(); ++i) {
-    raw_length += (all[i] - all[i - 1]).norm();
-  }
   const double nominal_spacing = std::clamp(
     options_.v_ref * std::max(0.35, 2.0 * options_.min_segment_time),
     std::max(options_.sample_resolution, 0.10), 1.50);
-  const int max_waypoints = options_.max_pieces + 1;
-  const int target_waypoints = std::clamp(
-    static_cast<int>(std::ceil(raw_length / nominal_spacing)) + 1,
+  const int max_waypoints = std::max(2, options_.max_pieces + 1);
+  const int target_samples = std::clamp(
+    static_cast<int>(std::ceil(guide.length / nominal_spacing)) + 1,
     2, max_waypoints);
-  if (static_cast<int>(turns.size()) > target_waypoints) {
-    std::vector<std::pair<double, size_t>> scored;
-    scored.reserve(turns.size());
-    for (size_t t = 0; t < turns.size(); ++t) {
-      const size_t idx = turns[t];
-      double angle = (t == 0 || t + 1 == turns.size()) ? 1e9 : 0.0;
-      if (angle < 1e9 && idx > 0 && idx + 1 < all.size()) {
-        const Eigen::Vector3d a = all[idx] - all[idx - 1];
-        const Eigen::Vector3d b = all[idx + 1] - all[idx];
-        if (a.norm() > 1.0e-6 && b.norm() > 1.0e-6) {
-          angle = std::acos(std::clamp(a.normalized().dot(b.normalized()), -1.0, 1.0));
+
+  std::vector<double> samples;
+  samples.reserve(static_cast<size_t>(target_samples) + guide.points.size());
+  for (int i = 0; i < target_samples; ++i) {
+    samples.push_back(
+      target_samples > 1 ?
+      guide.length * static_cast<double>(i) / static_cast<double>(target_samples - 1) : 0.0);
+  }
+  for (size_t i = 0; i < guide.arc_lengths.size(); ++i) {
+    samples.push_back(guide.arc_lengths[i]);
+  }
+  std::sort(samples.begin(), samples.end());
+  samples.erase(
+    std::unique(
+      samples.begin(), samples.end(),
+      [&](double a, double b) {
+        return std::abs(a - b) <
+          std::max(1.0e-5, 0.25 * std::max(options_.sample_resolution, 1.0e-3));
+      }),
+    samples.end());
+
+  if (static_cast<int>(samples.size()) > max_waypoints) {
+    const size_t interior_budget = static_cast<size_t>(std::max(0, max_waypoints - 2));
+    std::vector<std::pair<double, double>> turns;
+    turns.reserve(guide.points.size());
+    for (size_t i = 1; i + 1 < guide.points.size(); ++i) {
+      const double turn = anglePenalty(guide.points[i - 1], guide.points[i], guide.points[i + 1]);
+      if (turn > 0.15) {
+        turns.push_back({turn, guide.arc_lengths[i]});
+      }
+    }
+    std::sort(turns.begin(), turns.end(), [](const auto & a, const auto & b) {
+        return a.first > b.first;
+      });
+    const size_t turn_count = std::min(interior_budget, turns.size());
+    for (size_t i = 0; i < turn_count; ++i) {
+      samples.push_back(turns[i].second);
+    }
+    std::vector<double> protected_samples{0.0, guide.length};
+    protected_samples.reserve(turn_count + 2);
+    for (size_t i = 0; i < turn_count; ++i) {
+      protected_samples.push_back(turns[i].second);
+    }
+    std::sort(samples.begin(), samples.end());
+    samples.erase(
+      std::unique(
+        samples.begin(), samples.end(),
+        [&](double a, double b) {
+          return std::abs(a - b) <
+            std::max(1.0e-5, 0.25 * std::max(options_.sample_resolution, 1.0e-3));
+        }),
+      samples.end());
+    while (static_cast<int>(samples.size()) > max_waypoints) {
+      size_t remove_idx = 0;
+      double best_gap = std::numeric_limits<double>::infinity();
+      for (size_t i = 1; i + 1 < samples.size(); ++i) {
+        const bool protected_point = std::any_of(
+          protected_samples.begin(), protected_samples.end(),
+          [&](double s) {
+            return std::abs(s - samples[i]) <
+              std::max(1.0e-5, 0.25 * std::max(options_.sample_resolution, 1.0e-3));
+          });
+        if (protected_point) {continue;}
+        const double gap = samples[i + 1] - samples[i - 1];
+        if (gap < best_gap) {
+          best_gap = gap;
+          remove_idx = i;
         }
       }
-      scored.push_back({angle, idx});
-    }
-    std::partial_sort(
-      scored.begin(), scored.begin() + target_waypoints, scored.end(),
-      [](const auto & a, const auto & b) {return a.first > b.first;});
-    scored.resize(static_cast<size_t>(target_waypoints));
-    std::sort(scored.begin(), scored.end(),
-      [](const auto & a, const auto & b) {return a.second < b.second;});
-    turns.clear();
-    for (const auto & s : scored) {turns.push_back(s.second);}
-  }
-
-  const int extra = std::max(0, target_waypoints - static_cast<int>(turns.size()));
-  points.push_back(all[turns[0]]);
-  for (size_t t = 0; t + 1 < turns.size(); ++t) {
-    const size_t span = turns[t + 1] - turns[t];
-    const int slots = static_cast<int>(std::round(
-      static_cast<double>(extra) * static_cast<double>(span) /
-      static_cast<double>(all.size() - 1)));
-    const int stride = static_cast<int>(span) / std::max(1, slots + 1);
-    if (stride > 1) {
-      for (size_t s = turns[t] + static_cast<size_t>(stride);
-           s < turns[t + 1]; s += static_cast<size_t>(stride))
-      {
-        if ((all[s] - points.back()).norm() > 1.0e-5) {points.push_back(all[s]);}
-      }
-    }
-    if ((all[turns[t + 1]] - points.back()).norm() > 1.0e-5) {
-      points.push_back(all[turns[t + 1]]);
+      if (remove_idx == 0) {break;}
+      samples.erase(samples.begin() + static_cast<std::ptrdiff_t>(remove_idx));
     }
   }
 
+  points.reserve(samples.size());
+  for (const double s : samples) {
+    const Eigen::Vector3d p = guidePointAt(guide, s);
+    if (points.empty() || (p - points.back()).norm() > 1.0e-5) {
+      points.push_back(p);
+    }
+  }
+  if ((guide.points.back() - points.back()).norm() > 1.0e-5) {
+    points.push_back(guide.points.back());
+  }
   if (points.size() < 2) {return false;}
 
   times.resize(static_cast<int>(points.size()) - 1);
+  assignSegmentTimes(points, times);
+  return true;
+}
 
+void MincoOptimizer::assignSegmentTimes(
+  const std::vector<Eigen::Vector3d> & points, Eigen::VectorXd & times) const
+{
+  if (points.size() < 2) {
+    times.resize(0);
+    return;
+  }
+  times.resize(static_cast<int>(points.size()) - 1);
   if (options_.use_trapezoidal_time) {
-    // Global trapezoidal velocity profile, distribute by segment distance
     double total_equiv = 0.0;
     std::vector<double> seg_equiv(points.size() - 1, 0.0);
     for (size_t i = 0; i + 1 < points.size(); ++i) {
@@ -307,8 +402,18 @@ bool MincoOptimizer::buildWaypoints(
       times(static_cast<int>(i)) = segmentTime(prev, points[i], points[i + 1]);
     }
   }
+}
 
-  return true;
+void MincoOptimizer::smoothSegmentTimes(Eigen::VectorXd & times) const
+{
+  if (times.size() <= 2) {return;}
+  for (int iter = 0; iter < 3; ++iter) {
+    Eigen::VectorXd smoothed = times;
+    for (int i = 1; i < times.size() - 1; ++i) {
+      smoothed(i) = 0.5 * times(i) + 0.25 * (times(i - 1) + times(i + 1));
+    }
+    times = smoothed;
+  }
 }
 
 bool MincoOptimizer::enforceDynamicFeasibility(
@@ -465,9 +570,15 @@ bool MincoOptimizer::buildReferenceTrajectory(
   const nav_msgs::msg::Path & input, Result & result, nav_msgs::msg::Path & output,
   std::string * diagnostic) const
 {
+  GuidePath guide;
+  if (!buildGuidePath(input, guide)) {
+    if (diagnostic) {*diagnostic = "buildGuidePath failed";}
+    return false;
+  }
+
   std::vector<Eigen::Vector3d> points;
   Eigen::VectorXd times;
-  if (!buildWaypoints(input, points, times) || points.size() < 2) {
+  if (!buildWaypoints(guide, points, times) || points.size() < 2) {
     if (diagnostic) {*diagnostic = "buildWaypoints failed";}
     return false;
   }
@@ -499,7 +610,7 @@ bool MincoOptimizer::buildReferenceTrajectory(
 }
 
 int MincoOptimizer::optimizeWaypoints(
-  std::vector<Eigen::Vector3d> & points, Eigen::VectorXd & times,
+  std::vector<Eigen::Vector3d> & points, const GuidePath & guide, Eigen::VectorXd & times,
   const nav2_costmap_2d::Costmap2D * costmap,
   const std::vector<DynamicObstacle> * dynamic_obstacles,
   double w_energy, double w_reference, double w_obstacle,
@@ -528,6 +639,7 @@ int MincoOptimizer::optimizeWaypoints(
   OptimizationData data;
   data.optimizer = this;
   data.reference_points = &reference_points;
+  data.guide = &guide;
   data.times = &times;
   data.costmap = costmap;
   data.w_energy = w_energy;
@@ -742,7 +854,10 @@ double MincoOptimizer::evaluateObjective(
   grad_times *= data.w_energy;
 
   const bool use_esdf = options_.use_esdf && esdf_map_;
-  const bool need_traj = (options_.w_obstacle_traj > 0.0 && (data.costmap || use_esdf)) ||
+  const bool use_guide_reference = data.guide && data.guide->points.size() >= 2 &&
+    data.guide->length > 1.0e-6 && data.w_reference > 0.0;
+  const bool need_traj = use_guide_reference ||
+    (options_.w_obstacle_traj > 0.0 && (data.costmap || use_esdf)) ||
     options_.w_velocity > 0.0 || options_.w_acceleration > 0.0 ||
     (options_.dynamic_obstacle_enabled && data.dynamic_obstacles &&
     !data.dynamic_obstacles->empty());
@@ -753,6 +868,35 @@ double MincoOptimizer::evaluateObjective(
     double t_offset = 0.0;
     for (int k = 0; k < piece_num; ++k) {
       const double T_k = real_times(k);
+
+      if (use_guide_reference) {
+        const int n = std::max(
+          1, static_cast<int>(std::ceil(T_k / std::max(options_.obstacle_sample_dt, 1.0e-3))));
+        const double duration = std::max(real_times.sum(), 1.0e-6);
+        const double search_radius = std::max(
+          2.0 * options_.sample_resolution,
+          data.guide->length / static_cast<double>(std::max(2, piece_num)));
+        for (int s = 0; s <= n; ++s) {
+          const double tau = T_k * static_cast<double>(s) / static_cast<double>(n);
+          const double global_t = t_offset + tau;
+          const double hint_s = data.guide->length * std::clamp(global_t / duration, 0.0, 1.0);
+          const Eigen::Vector3d p = traj[k].getPos(tau);
+          const GuideProjection proj = projectToGuide(*data.guide, p, hint_s, search_radius);
+          if (!proj.valid) {continue;}
+          const Eigen::Vector3d diff = p - proj.point;
+          const double quadrature = (s == 0 || s == n) ? 0.5 : 1.0;
+          const double weight = quadrature * T_k / static_cast<double>(n);
+          cost += weight * data.w_reference * diff.squaredNorm();
+          const Eigen::Vector2d ref_grad =
+            2.0 * weight * data.w_reference * diff.head<2>();
+          double tau_pow = 1.0;
+          for (int j = 5; j >= 0; --j) {
+            grad_coeffs(6 * k + j, 0) += ref_grad.x() * tau_pow;
+            grad_coeffs(6 * k + j, 1) += ref_grad.y() * tau_pow;
+            tau_pow *= tau;
+          }
+        }
+      }
 
       if (options_.w_obstacle_traj > 0.0 && (data.costmap || use_esdf)) {
         const int n = std::max(1, static_cast<int>(std::ceil(T_k / options_.obstacle_sample_dt)));
@@ -913,10 +1057,12 @@ double MincoOptimizer::evaluateObjective(
     grad(id)     += grad_points(0, col);
     grad(id + 1) += grad_points(1, col);
 
-    const Eigen::Vector3d diff = points[i] - (*data.reference_points)[i];
-    cost += data.w_reference * diff.squaredNorm();
-    grad(id)     += 2.0 * data.w_reference * diff.x();
-    grad(id + 1) += 2.0 * data.w_reference * diff.y();
+    if (!use_guide_reference) {
+      const Eigen::Vector3d diff = points[i] - (*data.reference_points)[i];
+      cost += data.w_reference * diff.squaredNorm();
+      grad(id)     += 2.0 * data.w_reference * diff.x();
+      grad(id + 1) += 2.0 * data.w_reference * diff.y();
+    }
 
     if (options_.w_obstacle_traj <= 0.0) {
       Eigen::Vector2d obs_grad = Eigen::Vector2d::Zero();

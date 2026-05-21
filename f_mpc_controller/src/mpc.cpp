@@ -4,8 +4,6 @@
 #include <cstring>
 
 MPC::MPC(double dt, int horizon,
-         double /*vx_min*/, double /*vx_max*/,
-         double /*vy_min*/, double /*vy_max*/,
          double QX, double QY, double R, double S,
          double terminal_weight, int terminal_horizon, double Qv,
          double ax_max, double ay_max, double v_circle_max,
@@ -198,8 +196,8 @@ SolveResult MPC::solve(const State & current, const std::vector<State> & ref,
   }
 
   Eigen::VectorXd f = linear_f_mapping_ * error;
-  f(0) -= 2.0 * S_ * last_executed_u_(0);
-  f(1) -= 2.0 * S_ * last_executed_u_(1);
+  f(0) -= 2.0 * S_ * control_anchor_u_(0);
+  f(1) -= 2.0 * S_ * control_anchor_u_(1);
   if (Qv_ > 0.0) {
     for (int i = 0; i < N_; ++i) {
       const auto & v = v_ref[std::min(i, (int)v_ref.size()-1)];
@@ -212,10 +210,10 @@ SolveResult MPC::solve(const State & current, const std::vector<State> & ref,
 
   const int rate_offset = 8 * N_;
   const double du_max_x = ax_max_ * dt_, du_max_y = ay_max_ * dt_;
-  lb_(rate_offset)   = -du_max_x + last_executed_u_(0);
-  ub_(rate_offset)   = +du_max_x + last_executed_u_(0);
-  lb_(rate_offset+1) = -du_max_y + last_executed_u_(1);
-  ub_(rate_offset+1) = +du_max_y + last_executed_u_(1);
+  lb_(rate_offset)   = -du_max_x + control_anchor_u_(0);
+  ub_(rate_offset)   = +du_max_x + control_anchor_u_(0);
+  lb_(rate_offset+1) = -du_max_y + control_anchor_u_(1);
+  ub_(rate_offset+1) = +du_max_y + control_anchor_u_(1);
   solver_.updateBounds(lb_, ub_);
 
   if (solver_.solveProblem() != OsqpEigen::ErrorExitFlag::NoError) {

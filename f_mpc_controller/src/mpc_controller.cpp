@@ -80,6 +80,12 @@ void MpcController::declareParameters(
   declare_parameter_if_not_declared(node, plugin_name_ + ".stuck_lateral_threshold", rclcpp::ParameterValue(0.5));
   declare_parameter_if_not_declared(node, plugin_name_ + ".ax_max", rclcpp::ParameterValue(5.0));
   declare_parameter_if_not_declared(node, plugin_name_ + ".ay_max", rclcpp::ParameterValue(5.0));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".curvature_speed_limit_enabled",
+    rclcpp::ParameterValue(true));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".lateral_accel_limit",
+    rclcpp::ParameterValue(0.0));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".curvature_speed_limit_min_speed",
+    rclcpp::ParameterValue(0.15));
   declare_parameter_if_not_declared(node, plugin_name_ + ".v_circle_max", rclcpp::ParameterValue(3.0));
   declare_parameter_if_not_declared(node, plugin_name_ + ".goal_stop_distance", rclcpp::ParameterValue(0.10));
   declare_parameter_if_not_declared(node, plugin_name_ + ".brake_safety_factor", rclcpp::ParameterValue(0.7));
@@ -91,6 +97,16 @@ void MpcController::declareParameters(
     rclcpp::ParameterValue(0.80));
   declare_parameter_if_not_declared(node, plugin_name_ + ".max_odom_predict_dt",
     rclcpp::ParameterValue(0.10));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".enable_measured_velocity_anchor",
+    rclcpp::ParameterValue(true));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".velocity_anchor_blend_alpha",
+    rclcpp::ParameterValue(0.30));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".velocity_anchor_lowpass_alpha",
+    rclcpp::ParameterValue(0.50));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".velocity_anchor_max_age_sec",
+    rclcpp::ParameterValue(0.15));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".velocity_anchor_max_jump",
+    rclcpp::ParameterValue(1.5));
   declare_parameter_if_not_declared(node, plugin_name_ + ".minco_traj_topic",
     rclcpp::ParameterValue("trajectory_manager/trajectory_for_mpc"));
   declare_parameter_if_not_declared(node, plugin_name_ + ".fallback_sample_speed",
@@ -154,6 +170,10 @@ void MpcController::declareParameters(
   declare_parameter_if_not_declared(node, plugin_name_ + ".dynamic_safety_margin", rclcpp::ParameterValue(0.3));
   declare_parameter_if_not_declared(node, plugin_name_ + ".robot_radius", rclcpp::ParameterValue(0.2));
   declare_parameter_if_not_declared(node, plugin_name_ + ".max_dynamic_obstacles", rclcpp::ParameterValue(5));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".allow_obstacle_retry_without_constraints",
+    rclcpp::ParameterValue(false));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".allow_speed_limit_retry_without_limits",
+    rclcpp::ParameterValue(false));
   declare_parameter_if_not_declared(node, plugin_name_ + ".debug_logging",
     rclcpp::ParameterValue(false));
 }
@@ -191,12 +211,32 @@ void MpcController::loadParameters(
   node->get_parameter(plugin_name_ + ".ax_max", ax_max);
   node->get_parameter(plugin_name_ + ".ay_max", ay_max);
   ax_max_ = ax_max;
+  ay_max_ = ay_max;
+  node->get_parameter(
+    plugin_name_ + ".curvature_speed_limit_enabled", curvature_speed_limit_enabled_);
+  node->get_parameter(plugin_name_ + ".lateral_accel_limit", lateral_accel_limit_);
+  if (lateral_accel_limit_ <= 0.0) {
+    lateral_accel_limit_ = ay_max_;
+  }
+  node->get_parameter(
+    plugin_name_ + ".curvature_speed_limit_min_speed", curvature_speed_limit_min_speed_);
   node->get_parameter(plugin_name_ + ".goal_stop_distance", goal_stop_distance_);
   node->get_parameter(plugin_name_ + ".brake_safety_factor", brake_safety_factor_);
   node->get_parameter(plugin_name_ + ".use_odometry_state", use_odometry_state_);
   node->get_parameter(plugin_name_ + ".odom_topic", odom_topic_);
   node->get_parameter(plugin_name_ + ".max_odom_age_sec", max_odom_age_sec_);
   node->get_parameter(plugin_name_ + ".max_odom_predict_dt", max_odom_predict_dt_);
+  node->get_parameter(
+    plugin_name_ + ".enable_measured_velocity_anchor", enable_measured_velocity_anchor_);
+  node->get_parameter(
+    plugin_name_ + ".velocity_anchor_blend_alpha", velocity_anchor_blend_alpha_);
+  velocity_anchor_blend_alpha_ = std::clamp(velocity_anchor_blend_alpha_, 0.0, 1.0);
+  node->get_parameter(
+    plugin_name_ + ".velocity_anchor_lowpass_alpha", velocity_anchor_lowpass_alpha_);
+  velocity_anchor_lowpass_alpha_ = std::clamp(velocity_anchor_lowpass_alpha_, 0.0, 1.0);
+  node->get_parameter(
+    plugin_name_ + ".velocity_anchor_max_age_sec", velocity_anchor_max_age_sec_);
+  node->get_parameter(plugin_name_ + ".velocity_anchor_max_jump", velocity_anchor_max_jump_);
   node->get_parameter(plugin_name_ + ".minco_traj_topic", minco_traj_topic_);
   node->get_parameter(plugin_name_ + ".fallback_sample_speed", fallback_sample_speed_);
   node->get_parameter(
@@ -240,6 +280,12 @@ void MpcController::loadParameters(
   node->get_parameter(plugin_name_ + ".dynamic_safety_margin", dynamic_safety_margin_);
   node->get_parameter(plugin_name_ + ".robot_radius", robot_radius_);
   node->get_parameter(plugin_name_ + ".max_dynamic_obstacles", max_dynamic_obs_);
+  node->get_parameter(
+    plugin_name_ + ".allow_obstacle_retry_without_constraints",
+    allow_obstacle_retry_without_constraints_);
+  node->get_parameter(
+    plugin_name_ + ".allow_speed_limit_retry_without_limits",
+    allow_speed_limit_retry_without_limits_);
   node->get_parameter(plugin_name_ + ".debug_logging", debug_logging_);
 }
 
@@ -300,6 +346,18 @@ void MpcController::validateParameters(
       "Motion profile mismatch: non-positive acceleration limit ax=%.2f ay=%.2f",
       ax_max_, ay_max);
   }
+  if (lateral_accel_limit_ <= 0.0) {
+    RCLCPP_WARN(
+      node->get_logger(),
+      "Motion profile mismatch: non-positive lateral_accel_limit %.2f",
+      lateral_accel_limit_);
+  }
+  if (velocity_anchor_max_age_sec_ <= 0.0 && enable_measured_velocity_anchor_) {
+    RCLCPP_WARN(
+      node->get_logger(),
+      "velocity_anchor_max_age_sec %.3f disables measured velocity anchoring",
+      velocity_anchor_max_age_sec_);
+  }
   if (minco_timeout_sec_ < 2.0 / std::max(control_frequency_, 1.0)) {
     RCLCPP_WARN(
       node->get_logger(),
@@ -317,7 +375,7 @@ void MpcController::createMpcSolver(
   double ay_max)
 {
   // 在所有参数读取完成后创建求解器，避免障碍物约束矩阵尺寸使用未初始化配置。
-  mpc_ = std::make_shared<MPC>(control_dt_, horizon_, 0.0, v_circle_max, 0.0, v_circle_max,
+  mpc_ = std::make_shared<MPC>(control_dt_, horizon_,
                                 QX_, QY_, R_, S_, terminal_weight, terminal_horizon, Qv,
                                 ax_max, ay_max, v_circle_max,
                                 max_dynamic_obs_);
@@ -488,6 +546,89 @@ int MpcController::applyObstacleAndEsdfConstraints(
   return active_count;
 }
 
+void MpcController::updateMeasuredVelocityAnchor(
+  double vx_global,
+  double vy_global,
+  const rclcpp::Time & now,
+  double odom_age_sec)
+{
+  measured_velocity_raw_x_ = vx_global;
+  measured_velocity_raw_y_ = vy_global;
+  measured_velocity_anchor_age_sec_ = odom_age_sec;
+  measured_velocity_anchor_time_ = now;
+
+  if (!std::isfinite(vx_global) || !std::isfinite(vy_global)) {
+    has_measured_velocity_anchor_ = false;
+    return;
+  }
+
+  if (!has_filtered_velocity_anchor_) {
+    filtered_velocity_anchor_x_ = vx_global;
+    filtered_velocity_anchor_y_ = vy_global;
+    has_filtered_velocity_anchor_ = true;
+    has_measured_velocity_anchor_ = true;
+    return;
+  }
+
+  const double jump = std::hypot(
+    vx_global - filtered_velocity_anchor_x_,
+    vy_global - filtered_velocity_anchor_y_);
+  if (velocity_anchor_max_jump_ > 0.0 && jump > velocity_anchor_max_jump_) {
+    has_measured_velocity_anchor_ = false;
+    if (auto node = node_.lock()) {
+      RCLCPP_WARN_THROTTLE(
+        node->get_logger(), *clock_, 500,
+        "Measured velocity anchor rejected: jump=%.2fm/s limit=%.2fm/s raw=(%.2f, %.2f) filtered=(%.2f, %.2f)",
+        jump, velocity_anchor_max_jump_, vx_global, vy_global,
+        filtered_velocity_anchor_x_, filtered_velocity_anchor_y_);
+    }
+    return;
+  }
+
+  filtered_velocity_anchor_x_ =
+    velocity_anchor_lowpass_alpha_ * vx_global +
+    (1.0 - velocity_anchor_lowpass_alpha_) * filtered_velocity_anchor_x_;
+  filtered_velocity_anchor_y_ =
+    velocity_anchor_lowpass_alpha_ * vy_global +
+    (1.0 - velocity_anchor_lowpass_alpha_) * filtered_velocity_anchor_y_;
+  has_measured_velocity_anchor_ = true;
+}
+
+void MpcController::updateMpcVelocityAnchor()
+{
+  current_velocity_anchor_valid_ = false;
+  velocity_anchor_x_ = last_ux;
+  velocity_anchor_y_ = last_uy;
+
+  bool measured_valid = enable_measured_velocity_anchor_ && has_measured_velocity_anchor_;
+  if (measured_valid) {
+    const rclcpp::Time now = clock_->now();
+    double anchor_age = measured_velocity_anchor_age_sec_;
+    try {
+      anchor_age = std::max(anchor_age, (now - measured_velocity_anchor_time_).seconds());
+    } catch (const std::runtime_error &) {
+      measured_valid = false;
+    }
+    if (anchor_age < -0.05 || anchor_age > velocity_anchor_max_age_sec_) {
+      measured_valid = false;
+    }
+  }
+
+  if (measured_valid) {
+    const double alpha = velocity_anchor_blend_alpha_;
+    velocity_anchor_x_ = alpha * filtered_velocity_anchor_x_ + (1.0 - alpha) * last_ux;
+    velocity_anchor_y_ = alpha * filtered_velocity_anchor_y_ + (1.0 - alpha) * last_uy;
+    current_velocity_anchor_valid_ = true;
+  }
+
+  mpc_->setControlAnchorU(velocity_anchor_x_, velocity_anchor_y_);
+}
+
+double MpcController::currentVelocityAnchorSpeed() const
+{
+  return std::hypot(velocity_anchor_x_, velocity_anchor_y_);
+}
+
 void MpcController::applyHorizonSpeedLimitFloor()
 {
   // 对每步速度上限加入可达性下界，防止约束比当前速度刹停能力还激进。
@@ -495,7 +636,7 @@ void MpcController::applyHorizonSpeedLimitFloor()
     return;
   }
 
-  double min_reachable_speed = std::hypot(last_ux, last_uy);
+  double min_reachable_speed = currentVelocityAnchorSpeed();
   const double dv = std::max(ax_max_, 0.5) * control_dt_;
   const double octagon_scale = std::max(std::cos(M_PI / 8.0), 1.0e-3);
   for (size_t i = 0; i < horizon_speed_limits_.size(); ++i) {
@@ -517,7 +658,7 @@ SolveResult MpcController::solveMpcWithFallbacks(
   // 先按完整约束求解，必要时按障碍约束和逐步速度限制的优先级降级重试。
   auto node = node_.lock();
   SolveResult solve = mpc_->solve({r_x, r_y}, ref, v_ref_);
-  if (!solve.success && active_count > 0) {
+  if (!solve.success && active_count > 0 && allow_obstacle_retry_without_constraints_) {
     mpc_->clearObstacles();
     mpc_->resetWarmStart();
     solve = mpc_->solve({r_x, r_y}, ref, v_ref_);
@@ -528,7 +669,17 @@ SolveResult MpcController::solveMpcWithFallbacks(
         static_cast<int>(solve.status), active_count);
     }
   }
-  if (!solve.success && active_count == 0 && !horizon_speed_limits_.empty()) {
+  if (!solve.success && active_count > 0 && !allow_obstacle_retry_without_constraints_) {
+    if (node) {
+      RCLCPP_WARN_THROTTLE(node->get_logger(), *clock_, 500,
+        "MPC hard obstacle constraints infeasible — stopping instead of clearing constraints "
+        "(status=%d, active_obs=%d)",
+        static_cast<int>(solve.status), active_count);
+    }
+  }
+  if (!solve.success && active_count == 0 && !horizon_speed_limits_.empty() &&
+      allow_speed_limit_retry_without_limits_)
+  {
     mpc_->clearHorizonSpeedLimits();
     mpc_->resetWarmStart();
     solve = mpc_->solve({r_x, r_y}, ref, v_ref_);
@@ -536,6 +687,16 @@ SolveResult MpcController::solveMpcWithFallbacks(
       RCLCPP_WARN_THROTTLE(
         node->get_logger(), *clock_, 500,
         "MPC speed-limited solve failed — retrying without per-horizon speed limits "
+        "(status=%d)",
+        static_cast<int>(solve.status));
+    }
+  } else if (!solve.success && active_count == 0 && !horizon_speed_limits_.empty() &&
+             !allow_speed_limit_retry_without_limits_)
+  {
+    if (node) {
+      RCLCPP_WARN_THROTTLE(
+        node->get_logger(), *clock_, 500,
+        "MPC speed-limited solve failed — stopping instead of clearing per-horizon speed limits "
         "(status=%d)",
         static_cast<int>(solve.status));
     }
@@ -560,7 +721,7 @@ bool MpcController::handleInvalidOrFailedSolve(
     }
     last_ux = 0.0;
     last_uy = 0.0;
-    mpc_->setLastExecutedU(0.0, 0.0);
+    mpc_->setControlAnchorU(0.0, 0.0);
     mpc_->resetWarmStart();
     cmd_out = geometry_msgs::msg::TwistStamped();
     return true;
@@ -582,7 +743,7 @@ bool MpcController::handleInvalidOrFailedSolve(
     publishLocalPath(base_to_odom_tf);
     last_ux = 0.0;
     last_uy = 0.0;
-    mpc_->setLastExecutedU(0.0, 0.0);
+    mpc_->setControlAnchorU(0.0, 0.0);
     mpc_->resetWarmStart();
     cmd_out = geometry_msgs::msg::TwistStamped();
     cmd_out.header = cmd_header;
@@ -658,7 +819,7 @@ bool MpcController::checkPredictedCollision(
   }
   last_ux = 0.0;
   last_uy = 0.0;
-  mpc_->setLastExecutedU(0.0, 0.0);
+  mpc_->setControlAnchorU(0.0, 0.0);
   mpc_->resetWarmStart();
   const rclcpp::Time now = clock_->now();
   if (collision_stop_since_.nanoseconds() == 0) {
@@ -727,7 +888,7 @@ void MpcController::finalizeCommand(
   // 将最终输出记录回 odom 坐标系，供下一周期 warm start、限加速度和反向保护使用。
   last_ux = cp * cmd.twist.linear.x - sp * cmd.twist.linear.y;
   last_uy = sp * cmd.twist.linear.x + cp * cmd.twist.linear.y;
-  mpc_->setLastExecutedU(last_ux, last_uy);
+  mpc_->setControlAnchorU(last_ux, last_uy);
   if (auto node = node_.lock()) {
     RCLCPP_INFO_THROTTLE(
       node->get_logger(), *clock_, 1000,
@@ -834,6 +995,7 @@ geometry_msgs::msg::TwistStamped MpcController::computeVelocityCommands(
   const double prev_ms = mark_ms();
   int active_count = applyObstacleAndEsdfConstraints(r_x, r_y, p_prev);
   const double obs_ms = mark_ms();
+  updateMpcVelocityAnchor();
   applyHorizonSpeedLimitFloor();
   const double limit_ms = mark_ms();
   SolveResult solve = solveMpcWithFallbacks(r_x, r_y, active_count);
@@ -853,9 +1015,14 @@ geometry_msgs::msg::TwistStamped MpcController::computeVelocityCommands(
     RCLCPP_INFO_THROTTLE(
       node->get_logger(), *clock_, 1000,
       "MPC solve diag: success=%d status=%d u=(%.3f, %.3f) ref0_dist=%.2f ref0_v=%.2f "
-      "speed_limit=[%.2f, %.2f] current_s=%.2f total=%.2f active_obs=%d",
+      "speed_limit=[%.2f, %.2f] curv_min=%.2f time_scale=%.2f "
+      "cmd_last=(%.2f, %.2f) odom_vel=(%.2f, %.2f) anchor=(%.2f, %.2f) anchor_valid=%d "
+      "current_s=%.2f total=%.2f active_obs=%d",
       solve.success ? 1 : 0, static_cast<int>(solve.status), u.vx, u.vy,
       ref0_dist_diag, ref0_speed_diag, min_limit_diag, max_limit_diag,
+      last_min_curvature_speed_limit_, last_ref_time_scale_,
+      last_ux, last_uy, measured_velocity_raw_x_, measured_velocity_raw_y_,
+      velocity_anchor_x_, velocity_anchor_y_, current_velocity_anchor_valid_ ? 1 : 0,
       current_s_, path_total_dist_, active_count);
   }
 

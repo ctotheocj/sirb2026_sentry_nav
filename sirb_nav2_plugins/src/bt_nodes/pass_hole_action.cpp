@@ -25,6 +25,8 @@ void PassHoleAction::on_tick()
   getInput("entry_port", goal_.entry_port);
   getInput("entry_pose", goal_.entry_pose);
   getInput("exit_pose", goal_.exit_pose);
+  getInput("entry_polygon", goal_.entry_polygon);
+  getInput("exit_polygon", goal_.exit_polygon);
   getInput("corridor", goal_.corridor);
 
   double timeout_sec = 8.0;

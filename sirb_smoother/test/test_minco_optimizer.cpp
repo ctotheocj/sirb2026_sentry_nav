@@ -96,10 +96,19 @@ TEST(MincoOptimizer, SShape)
 TEST(MincoOptimizer, TooShort)
 {
   auto opt = makeOptimizer();
-  auto input = makePath({{0,0},{1,0}});  // only 2 poses → disabled
+  auto input = makePath({{0,0}});
   nav_msgs::msg::Path output;
   auto res = opt.smooth(input, output);
-  EXPECT_FALSE(res.success);  // < 3 poses → returns false
+  EXPECT_FALSE(res.success);
+}
+
+TEST(MincoOptimizer, TwoPointPath)
+{
+  auto opt = makeOptimizer();
+  auto input = makePath({{0,0},{1,0}});
+  nav_msgs::msg::Path output;
+  auto res = opt.smooth(input, output);
+  checkResult(res, output, input);
 }
 
 TEST(MincoOptimizer, DuplicatePoints)

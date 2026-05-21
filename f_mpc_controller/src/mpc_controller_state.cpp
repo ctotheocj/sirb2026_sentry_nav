@@ -66,11 +66,14 @@ bool MpcController::getOdomControlState(
     state_stamp = odom_receive_time;
   }
 
+  double stamp_age = age;
   double predict_dt = 0.0;
   try {
-    predict_dt = std::clamp((now - state_stamp).seconds(), 0.0, max_odom_predict_dt_);
+    stamp_age = (now - state_stamp).seconds();
+    predict_dt = std::clamp(stamp_age, 0.0, max_odom_predict_dt_);
   } catch (const std::runtime_error &) {
     predict_dt = std::clamp(age, 0.0, max_odom_predict_dt_);
+    stamp_age = age;
     state_stamp = odom_receive_time;
   }
   state_time_sec = state_stamp.seconds() + predict_dt;
@@ -105,6 +108,8 @@ bool MpcController::getOdomControlState(
   const double s = std::sin(yaw);
   const double vx_global = c * vx_child - s * vy_child;
   const double vy_global = s * vx_child + c * vy_child;
+  double anchor_vx_global = vx_global;
+  double anchor_vy_global = vy_global;
 
   tf2::Vector3 origin = odom_tf.getOrigin();
   origin.setX(origin.x() + vx_global * predict_dt);
@@ -122,6 +127,11 @@ bool MpcController::getOdomControlState(
         odom_child_frame, control_base_frame, tf2::TimePointZero);
       tf2::Transform child_to_base_tf;
       tf2::fromMsg(child_to_base_msg.transform, child_to_base_tf);
+      const tf2::Vector3 child_offset = child_to_base_tf.getOrigin();
+      const double vx_offset_child = -wz * child_offset.y();
+      const double vy_offset_child =  wz * child_offset.x();
+      anchor_vx_global += c * vx_offset_child - s * vy_offset_child;
+      anchor_vy_global += s * vx_offset_child + c * vy_offset_child;
       odom_tf = odom_tf * child_to_base_tf;
     } catch (tf2::TransformException &) {
       auto node = node_.lock();
@@ -133,6 +143,9 @@ bool MpcController::getOdomControlState(
       return false;
     }
   }
+
+  const double velocity_anchor_age = std::max(age, stamp_age);
+  updateMeasuredVelocityAnchor(anchor_vx_global, anchor_vy_global, now, velocity_anchor_age);
 
   base_to_odom_tf = odom_tf;
   return true;

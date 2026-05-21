@@ -2,12 +2,12 @@
 #define SIRB_NAV2_PLUGINS__LAYERS__OCCUPANCY_GRID_OBSTACLE_LAYER_HPP_
 
 #include <mutex>
-#include <utility>
 #include <string>
-#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "geometry_msgs/msg/polygon.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp"
 #include "nav2_costmap_2d/layer.hpp"
 #include "nav2_costmap_2d/layered_costmap.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
@@ -36,13 +36,12 @@ public:
   virtual bool isClearable() { return false; }
 
 private:
-  struct ObservedCell
+  struct CellArea
   {
     double min_x;
     double min_y;
     double max_x;
     double max_y;
-    rclcpp::Time stamp;
   };
 
   void incomingMap(const nav_msgs::msg::OccupancyGrid::SharedPtr msg);
@@ -52,9 +51,18 @@ private:
   void setSemanticLayerModeService(
     const std::shared_ptr<sentry_nav_interfaces::srv::SetSemanticLayerMode::Request> request,
     std::shared_ptr<sentry_nav_interfaces::srv::SetSemanticLayerMode::Response> response);
-  std::vector<ObservedCell> getValidCells();
-  void pruneExpiredCells(const rclcpp::Time & now);
-  bool cellMaskedByCorridor(const ObservedCell & cell) const;
+  CellArea cellAreaFromGrid(
+    const nav_msgs::msg::MapMetaData & info, unsigned int x, unsigned int y) const;
+  bool lookupTransformToCostmapFrame(
+    const std::string & source_frame, geometry_msgs::msg::TransformStamped & transform,
+    bool & same_frame) const;
+  CellArea transformCellToCostmapFrame(
+    const CellArea & cell, const geometry_msgs::msg::TransformStamped & transform,
+    bool same_frame) const;
+  bool transformCellsToCostmapFrame(
+    const std::string & source_frame, const std::vector<CellArea> & source_cells,
+    std::vector<CellArea> & target_cells) const;
+  bool cellMaskedByCorridor(const CellArea & cell) const;
   bool pointInCorridor(double x, double y) const;
   bool pointInPolygon(
     double x, double y, const std::vector<std::pair<double, double>> & polygon) const;
@@ -62,14 +70,16 @@ private:
     const std::string & frame_id,
     const geometry_msgs::msg::Polygon & corridor,
     std::vector<std::pair<double, double>> & transformed) const;
-  bool mapGeometryChanged(const nav_msgs::msg::MapMetaData & info) const;
-  static int64_t cellKey(unsigned int x, unsigned int y);
-  void touch(double x, double y, double * min_x, double * min_y, double * max_x, double * max_y);
+  void touchCells(
+    const std::vector<CellArea> & cells, double * min_x, double * min_y, double * max_x,
+    double * max_y) const;
+  void touch(double x, double y, double * min_x, double * min_y, double * max_x, double * max_y)
+    const;
 
   bool enabled_;
   bool map_received_;
   int occupied_threshold_;
-  double obstacle_keep_time_;
+  double source_timeout_;
   bool stamp_source_cell_area_;
   bool debug_logging_;
   std::string topic_;
@@ -84,15 +94,14 @@ private:
   std::mutex map_mutex_;
   std::mutex cells_mutex_;
   mutable std::mutex mode_mutex_;
-  std::unordered_map<int64_t, ObservedCell> observed_cells_;
+  std::vector<CellArea> source_cells_;
+  std::vector<CellArea> last_stamped_target_cells_;
+  std::vector<CellArea> cost_update_cells_;
+  std::string source_frame_;
+  double last_map_time_sec_{-1.0};
+  bool needs_clear_previous_{false};
   bool hole_pass_mode_{false};
   std::vector<std::pair<double, double>> corridor_polygon_;
-
-  double last_resolution_;
-  double last_origin_x_;
-  double last_origin_y_;
-  uint32_t last_width_;
-  uint32_t last_height_;
 };
 
 }  // namespace pb_nav2_costmap_2d

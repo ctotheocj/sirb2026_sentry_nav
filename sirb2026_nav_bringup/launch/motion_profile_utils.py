@@ -82,6 +82,7 @@ def apply_motion_profile_to_dict(data):
     max_accel = float(profile["max_accel"])
     control_speed = float(profile["control_speed_limit"])
     control_accel = float(profile["control_accel_limit"])
+    planned_accel = min(max_accel, control_accel)
     tracking_soft = float(profile["tracking_error_soft"])
     tracking_hard = float(profile["tracking_error_hard"])
     localization_jump = float(profile["localization_jump_speed"])
@@ -95,6 +96,7 @@ def apply_motion_profile_to_dict(data):
     follow["v_ref_max"] = control_speed
     follow["ax_max"] = control_accel
     follow["ay_max"] = control_accel
+    follow["lateral_accel_limit"] = control_accel
     follow["v_circle_max"] = control_speed
     follow["pose_jump_speed_threshold"] = localization_jump
     follow["enable_lateral_error_ref_scaling"] = True
@@ -103,7 +105,7 @@ def apply_motion_profile_to_dict(data):
 
     smoother["minco_v_ref"] = max_speed
     smoother["minco_v_max"] = control_speed
-    smoother["minco_a_max"] = max_accel
+    smoother["minco_a_max"] = planned_accel
     smoother["minco_dynamic_realloc_max_segment_scale"] = max(
         float(smoother.get("minco_dynamic_realloc_max_segment_scale", 8.0)), 8.0)
     smoother["minco_max_segment_time"] = max(
@@ -115,10 +117,8 @@ def apply_motion_profile_to_dict(data):
 
     manager["publish_full_active_trajectory"] = True
     manager["publish_rate_hz"] = max(20.0, float(manager.get("publish_rate_hz", 20.0)))
-    manager["switch_max_velocity_error"] = max(
-        control_speed, float(manager.get("switch_max_velocity_error", control_speed)))
-    manager["switch_max_acceleration_error"] = max(
-        max_accel, float(manager.get("switch_max_acceleration_error", max_accel)))
+    manager["switch_max_velocity_error"] = control_speed
+    manager["switch_max_acceleration_error"] = planned_accel
 
     fake_vel["max_latest_cmd_age_sec"] = min(
         float(fake_vel.get("max_latest_cmd_age_sec", 0.12)), 0.12)
@@ -132,10 +132,10 @@ def apply_motion_profile_to_dict(data):
         velocity.get("min_velocity", []), -control_speed, -control_speed,
         float(velocity.get("min_velocity", [0.0, 0.0, 0.0])[2]))
     velocity["max_accel"] = _set_xy(
-        velocity.get("max_accel", []), max(control_accel, max_accel), max(control_accel, max_accel),
+        velocity.get("max_accel", []), control_accel, control_accel,
         float(velocity.get("max_accel", [0.0, 0.0, 0.0])[2]))
     velocity["max_decel"] = _set_xy(
-        velocity.get("max_decel", []), -max(control_accel, max_accel), -max(control_accel, max_accel),
+        velocity.get("max_decel", []), -control_accel, -control_accel,
         float(velocity.get("max_decel", [0.0, 0.0, 0.0])[2]))
 
 

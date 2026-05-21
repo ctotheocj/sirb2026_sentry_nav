@@ -29,6 +29,7 @@ private:
   void watchdogCallback();
   bool enterHolePass(const SetNavigationMode::Request & request, std::string & message);
   bool restoreNormal(const std::string & owner_id, std::string & message);
+  bool applyNormalModeServices();
   bool callSemanticLayer(
     const std::string & service,
     const std::string & mode,

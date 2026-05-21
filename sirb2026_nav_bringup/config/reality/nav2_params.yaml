@@ -97,7 +97,7 @@ loam_interface:
 motion_profile:
   ros__parameters:
     max_speed: 2.2 # 规划期望最高速度，主要驱动 MINCO 参考速度。
-    max_accel: 4.0 # 规划允许最大加速度
+    max_accel: 4.0 # 规划期望最大加速度；实际 MINCO 加速度会被 control_accel_limit 钳制。
     control_speed_limit: 2.5 # 控制器速度上限
     control_accel_limit: 3.0 # 控制器最终加速度上限
     tracking_error_soft: 0.30 # 跟踪误差超过该值后开始降低参考速度
@@ -162,7 +162,7 @@ hole_pass_controller:
     prepare_distance: 1.5
     stop_distance: 0.4
     slow_speed: 0.25
-    pass_speed: 0.45
+    pass_speed: 1.45
     yaw_offset_deg: 0.0
     yaw_kp: 2.5
     max_v_yaw: 1.8
@@ -294,13 +294,6 @@ slam_toolbox:
     use_map_saver: true
     mode: mapping
 
-    # if you'd like to immediately start continuing a map at a given pose
-    # or at the dock, but they are mutually exclusive, if pose is given
-    # will use pose
-    # map_file_name: test_steve
-    # map_start_pose: [0.0, 0.0, 0.0]
-    # map_start_at_dock: true
-
     debug_logging: false
     throttle_scans: 1
     scan_queue_size: 10
@@ -363,6 +356,7 @@ bt_navigator:
     wait_for_service_timeout: 1000
     hole_pass:
       prepare_distance: 1.5
+      exit_goal_offset: 0.4
       alignment_tolerance_deg: 25.0
       trajectory_max_age: 0.3
       hole_ids: ["hole_1", "hole_2"]
@@ -453,6 +447,11 @@ controller_server:
       odom_topic: "odometry"
       max_odom_age_sec: 0.80
       max_odom_predict_dt: 0.10
+      enable_measured_velocity_anchor: true
+      velocity_anchor_blend_alpha: 0.30
+      velocity_anchor_lowpass_alpha: 0.50
+      velocity_anchor_max_age_sec: 0.15
+      velocity_anchor_max_jump: 1.5
       minco_timeout_sec: 0.50
       minco_goal_reset_tolerance: 0.5
       reset_warm_start_on_goal_change_only: true
@@ -462,6 +461,8 @@ controller_server:
       reverse_guard_min_ref_speed: 0.05
       reverse_guard_allowance: 0.03
       collision_stop_failure_sec: 0.8
+      allow_obstacle_retry_without_constraints: false
+      allow_speed_limit_retry_without_limits: false
       minco_traj_topic: "trajectory_manager/trajectory_for_mpc"
       QX: 60.0      #10~100，下同
       QY: 60.0
@@ -477,6 +478,9 @@ controller_server:
       terminal_horizon: 2
       ax_max: 3.0
       ay_max: 3.0
+      curvature_speed_limit_enabled: true
+      lateral_accel_limit: 3.0
+      curvature_speed_limit_min_speed: 0.15
       v_circle_max: 2.5
       goal_stop_distance: 0.15
       brake_safety_factor: 0.8
@@ -533,14 +537,14 @@ local_costmap:
         plugin: pb_nav2_costmap_2d::OccupancyGridObstacleLayer
         enabled: true
         topic: <robot_namespace>/occupancy_grid
-        occupied_threshold: 65
-        obstacle_keep_time: 0.35
+        occupied_threshold: 50
+        source_timeout: 0.6
         stamp_source_cell_area: true
         debug_logging: false
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 4.0
-        inflation_radius: 0.8
+        inflation_radius: 0.2
       always_send_full_costmap: True
 
 global_costmap:
@@ -560,8 +564,8 @@ global_costmap:
         plugin: pb_nav2_costmap_2d::OccupancyGridObstacleLayer
         enabled: true
         topic: <robot_namespace>/occupancy_grid
-        occupied_threshold: 65
-        obstacle_keep_time: 0.35
+        occupied_threshold: 50
+        source_timeout: 0.6
         stamp_source_cell_area: true
         debug_logging: false
       static_layer:
@@ -570,7 +574,7 @@ global_costmap:
         map_subscribe_transient_local: True
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.5
+        cost_scaling_factor: 6.5
         inflation_radius: 0.55
       always_send_full_costmap: True
 
@@ -634,11 +638,12 @@ smoother_server:
       # Kinematics
       minco_v_ref: 2.2
       minco_v_max: 2.5
-      minco_a_max: 4.0
+      minco_a_max: 3.0
       minco_w_velocity: 1.0
       minco_w_acceleration: 0.5
       minco_dynamics_sample_dt: 0.08
       minco_dynamic_realloc_max_segment_scale: 8.0
+      min_clearance_for_removal: 0.25
       minco_min_segment_time: 0.15
       minco_max_segment_time: 4.0
       minco_max_pieces: 60
@@ -701,7 +706,7 @@ trajectory_manager:
     switch_goal_change_distance: 0.5
     switch_max_position_error: 0.45
     switch_max_velocity_error: 2.5
-    switch_max_acceleration_error: 4.0
+    switch_max_acceleration_error: 3.0
     switch_min_direction_dot: -0.2
     switch_min_candidate_duration_sec: 0.2
     switch_min_interval_sec: 1.0
@@ -765,8 +770,8 @@ velocity_smoother:
     feedback: "OPEN_LOOP"
     max_velocity: [2.5, 2.5, 3.0]
     min_velocity: [-2.5, -2.5, -3.0]
-    max_accel: [4.0, 4.0, 5.0]
-    max_decel: [-4.0, -4.0, -5.0]
+    max_accel: [3.0, 3.0, 5.0]
+    max_decel: [-3.0, -3.0, -5.0]
     odom_topic: "odometry"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]

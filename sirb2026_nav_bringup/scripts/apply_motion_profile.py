@@ -37,20 +37,22 @@ def derived(profile):
     max_accel = float(profile["max_accel"])
     control_speed = float(profile["control_speed_limit"])
     control_accel = float(profile["control_accel_limit"])
+    planned_accel = min(max_accel, control_accel)
     localization_jump = float(profile["localization_jump_speed"])
     return {
         "minco_v_ref": max_speed,
         "minco_v_max": control_speed,
-        "minco_a_max": max_accel,
+        "minco_a_max": planned_accel,
         "follow_v_ref_max": control_speed,
         "follow_ax_max": control_accel,
         "follow_ay_max": control_accel,
+        "follow_lateral_accel_limit": control_accel,
         "follow_v_circle_max": control_speed,
         "tracking_error_soft": float(profile["tracking_error_soft"]),
         "tracking_error_hard": float(profile["tracking_error_hard"]),
         "pose_jump_speed_threshold": localization_jump,
         "switch_max_velocity_error": control_speed,
-        "switch_max_acceleration_error": max_accel,
+        "switch_max_acceleration_error": planned_accel,
         "velocity_max_xy": control_speed,
         "velocity_accel_xy": control_accel,
     }
@@ -77,6 +79,7 @@ def apply_profile(data):
     set_if_changed(follow, "v_ref_max", values["follow_v_ref_max"], changes)
     set_if_changed(follow, "ax_max", values["follow_ax_max"], changes)
     set_if_changed(follow, "ay_max", values["follow_ay_max"], changes)
+    set_if_changed(follow, "lateral_accel_limit", values["follow_lateral_accel_limit"], changes)
     set_if_changed(follow, "v_circle_max", values["follow_v_circle_max"], changes)
     set_if_changed(follow, "pose_jump_speed_threshold", values["pose_jump_speed_threshold"], changes)
     set_if_changed(follow, "enable_lateral_error_ref_scaling", True, changes)
@@ -117,13 +120,13 @@ def apply_profile(data):
     set_if_changed(
         manager,
         "switch_max_velocity_error",
-        max(values["switch_max_velocity_error"], float(manager.get("switch_max_velocity_error", 0.0))),
+        values["switch_max_velocity_error"],
         changes,
     )
     set_if_changed(
         manager,
         "switch_max_acceleration_error",
-        max(values["switch_max_acceleration_error"], float(manager.get("switch_max_acceleration_error", 0.0))),
+        values["switch_max_acceleration_error"],
         changes,
     )
 
@@ -144,7 +147,7 @@ def apply_profile(data):
     max_velocity[1] = values["velocity_max_xy"]
     min_velocity[0] = -values["velocity_max_xy"]
     min_velocity[1] = -values["velocity_max_xy"]
-    xy_accel = max(values["velocity_accel_xy"], values["minco_a_max"])
+    xy_accel = values["velocity_accel_xy"]
     max_accel[0] = xy_accel
     max_accel[1] = xy_accel
     max_decel[0] = -xy_accel

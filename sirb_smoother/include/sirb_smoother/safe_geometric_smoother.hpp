@@ -2,6 +2,7 @@
 #define PB_NAV2_SMOOTHER__SAFE_GEOMETRIC_SMOOTHER_HPP_
 
 #include <atomic>
+#include <limits>
 #include <string>
 #include <vector>
 #include <thread>
@@ -56,6 +57,14 @@ private:
 
   bool smooth(nav_msgs::msg::Path & path, const rclcpp::Duration & max_time) override;
   bool acquireEsdfMap(const char * reason, bool warn_on_failure);
+  bool buildSafeReferenceFallback(
+    const nav_msgs::msg::Path & reference_path,
+    const nav_msgs::msg::Path & geometry_baseline,
+    const nav2_costmap_2d::Costmap2D & costmap,
+    const Footprint & footprint,
+    MincoOptimizer::Result & result,
+    nav_msgs::msg::Path & candidate,
+    std::string & diagnostic) const;
 
   bool isPathSafe(
     const nav_msgs::msg::Path & path, const nav2_costmap_2d::Costmap2D & costmap,
@@ -67,6 +76,20 @@ private:
     const Footprint & footprint) const;
   bool isPoseSafe(
     const geometry_msgs::msg::PoseStamped & pose,
+    const nav2_costmap_2d::Costmap2D & costmap,
+    const Footprint & footprint) const;
+  double poseClearance(
+    const geometry_msgs::msg::PoseStamped & pose,
+    const nav2_costmap_2d::Costmap2D & costmap,
+    const Footprint & footprint) const;
+  double segmentClearance(
+    const geometry_msgs::msg::PoseStamped & from,
+    const geometry_msgs::msg::PoseStamped & to,
+    const nav2_costmap_2d::Costmap2D & costmap,
+    const Footprint & footprint) const;
+  bool isSegmentClear(
+    const geometry_msgs::msg::PoseStamped & from,
+    const geometry_msgs::msg::PoseStamped & to,
     const nav2_costmap_2d::Costmap2D & costmap,
     const Footprint & footprint) const;
 
@@ -109,10 +132,6 @@ private:
   void publishCollisionMarkers(
     const std::vector<geometry_msgs::msg::PoseStamped> & poses,
     const std_msgs::msg::Header & header) const;
-  void publishMpcTrajectory(
-    const MincoOptimizer::Result & result,
-    const std_msgs::msg::Header & header) const;
-  void publishCachedMpcTrajectory(const std_msgs::msg::Header & header) const;
   sentry_nav_interfaces::msg::MincoTrajectory makeMpcTrajectory(
     const MincoOptimizer::Result & result,
     const std_msgs::msg::Header & header) const;
@@ -153,6 +172,7 @@ private:
   double resample_resolution_{0.20};
   double max_shortcut_dist_{2.0};
   int max_shortcut_skip_{30};
+  double min_clearance_for_removal_{0.25};
 
   bool use_footprint_collision_check_{true};
   unsigned char footprint_collision_cost_threshold_{253};

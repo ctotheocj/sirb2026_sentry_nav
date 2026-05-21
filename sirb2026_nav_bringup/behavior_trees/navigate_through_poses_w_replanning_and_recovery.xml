@@ -59,7 +59,9 @@
                                      entry_pose="{hole_entry_pose}"
                                      exit_pose="{hole_exit_pose}"
                                      hole_exit_goal="{hole_exit_goal}"
-                                       corridor_polygon="{hole_corridor}"/>
+                                     entry_polygon="{hole_entry_polygon}"
+                                     exit_polygon="{hole_exit_polygon}"
+                                     corridor_polygon="{hole_corridor}"/>
                 <HolePassScope hole_id="{hole_id}"
                              corridor="{hole_corridor}"
                              mode_service="navigation_mode_manager/set_navigation_mode"
@@ -83,6 +85,8 @@
                             entry_port="{entry_port}"
                             entry_pose="{hole_entry_pose}"
                             exit_pose="{hole_exit_pose}"
+                            entry_polygon="{hole_entry_polygon}"
+                            exit_polygon="{hole_exit_polygon}"
                             corridor="{hole_corridor}"
                             server_name="pass_hole"
                             timeout_sec="8.0"/>

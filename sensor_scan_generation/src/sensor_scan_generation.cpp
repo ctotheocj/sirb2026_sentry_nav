@@ -22,7 +22,6 @@
 
 namespace sensor_scan_generation
 {
-
 SensorScanGenerationNode::SensorScanGenerationNode(const rclcpp::NodeOptions & options)
 : Node("sensor_scan_generation", options)
 {
@@ -145,7 +144,8 @@ void SensorScanGenerationNode::laserCloudAndOdometryHandler(
   publishTransform(
     tf_odom_to_chassis_out, odometry_msg->header.frame_id, base_frame_, pcd_msg->header.stamp);
   publishOdometry(
-    tf_odom_to_robot_base_out, odometry_msg->header.frame_id, robot_base_frame_, pcd_msg->header.stamp);
+    tf_odom_to_robot_base_out, tf_odom_to_chassis_out, odometry_msg->header.frame_id,
+    robot_base_frame_, pcd_msg->header.stamp);
 
   sensor_msgs::msg::PointCloud2 out;
   pcl_ros::transformPointCloud(lidar_frame_, tf_odom_to_lidar.inverse(), *pcd_msg, out);
@@ -203,8 +203,8 @@ void SensorScanGenerationNode::publishTransform(
 }
 
 void SensorScanGenerationNode::publishOdometry(
-  const tf2::Transform & transform, std::string parent_frame, const std::string & child_frame,
-  const rclcpp::Time & stamp)
+  const tf2::Transform & transform, const tf2::Transform & linear_reference_transform,
+  std::string parent_frame, const std::string & child_frame, const rclcpp::Time & stamp)
 {
   nav_msgs::msg::Odometry out;
   out.header.stamp = stamp;
@@ -231,33 +231,45 @@ void SensorScanGenerationNode::publishOdometry(
   out.twist.covariance[28] = odom_twist_cov_rp_;
   out.twist.covariance[35] = odom_twist_cov_yaw_;
 
-  if (has_previous_odometry_) {
-    const double dt = (stamp - previous_odometry_stamp_).seconds();
-    if (dt > 1.0e-4 && dt < 0.5) {
-      const auto linear_velocity_parent =
-        (transform.getOrigin() - previous_odometry_transform_.getOrigin()) / dt;
-      const tf2::Vector3 linear_velocity_child =
-        tf2::quatRotate(transform.getRotation().inverse(), linear_velocity_parent);
-
-      // The downstream controller uses a planar ground-robot model: publish twist in child frame.
-      const double yaw = tf2::getYaw(transform.getRotation());
-      const double previous_yaw = tf2::getYaw(previous_odometry_transform_.getRotation());
-      const double yaw_rate = normalizeAngle(yaw - previous_yaw) / dt;
-
-      out.twist.twist.linear.x = linear_velocity_child.x();
-      out.twist.twist.linear.y = linear_velocity_child.y();
-      out.twist.twist.linear.z = linear_velocity_child.z();
-      out.twist.twist.angular.x = 0.0;
-      out.twist.twist.angular.y = 0.0;
-      out.twist.twist.angular.z = yaw_rate;
-    }
-  }
+  out.twist.twist = estimateRobotTwist(transform, linear_reference_transform, stamp);
 
   previous_odometry_transform_ = transform;
+  previous_linear_reference_transform_ = linear_reference_transform;
   previous_odometry_stamp_ = stamp;
   has_previous_odometry_ = true;
 
   pub_chassis_odometry_->publish(out);
+}
+
+geometry_msgs::msg::Twist SensorScanGenerationNode::estimateRobotTwist(
+  const tf2::Transform & transform, const tf2::Transform & linear_reference_transform,
+  const rclcpp::Time & stamp) const
+{
+  geometry_msgs::msg::Twist twist;
+  if (!has_previous_odometry_) {
+    return twist;
+  }
+
+  const double dt = (stamp - previous_odometry_stamp_).seconds();
+  if (dt <= 1.0e-4 || dt >= 0.5) {
+    return twist;
+  }
+
+  const auto linear_velocity_parent =
+    (linear_reference_transform.getOrigin() - previous_linear_reference_transform_.getOrigin()) / dt;
+  const tf2::Vector3 linear_velocity_child =
+    tf2::quatRotate(transform.getRotation().inverse(), linear_velocity_parent);
+
+  const double yaw = tf2::getYaw(transform.getRotation());
+  const double previous_yaw = tf2::getYaw(previous_odometry_transform_.getRotation());
+
+  twist.linear.x = linear_velocity_child.x();
+  twist.linear.y = linear_velocity_child.y();
+  twist.linear.z = 0.0;
+  twist.angular.x = 0.0;
+  twist.angular.y = 0.0;
+  twist.angular.z = normalizeAngle(yaw - previous_yaw) / dt;
+  return twist;
 }
 
 double SensorScanGenerationNode::normalizeAngle(double angle)

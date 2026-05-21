@@ -38,11 +38,6 @@ public:
     double sample_resolution{0.10};
     int max_pieces{80};
     bool use_lbfgs{true};
-    // legacy single-stage (unused when two-stage is active)
-    int max_iterations{60};
-    double w_energy{1.0};
-    double w_reference{10.0};
-    double w_obstacle{2.0};
     double obstacle_cost_threshold{128.0};
     double obstacle_finite_diff_step{0.05};
     double obstacle_sample_dt{0.05};
@@ -141,10 +136,25 @@ public:
     std::string * diagnostic = nullptr) const;
 
 private:
+  struct GuidePath
+  {
+    std::vector<Eigen::Vector3d> points;
+    std::vector<double> arc_lengths;
+    double length{0.0};
+  };
+
+  struct GuideProjection
+  {
+    Eigen::Vector3d point{Eigen::Vector3d::Zero()};
+    double distance_sq{0.0};
+    bool valid{false};
+  };
+
   struct OptimizationData
   {
     const MincoOptimizer * optimizer{nullptr};
     const std::vector<Eigen::Vector3d> * reference_points{nullptr};
+    const GuidePath * guide{nullptr};
     const Eigen::VectorXd * times{nullptr};
     const nav2_costmap_2d::Costmap2D * costmap{nullptr};
     double w_energy{1.0};
@@ -156,11 +166,19 @@ private:
     int n_pts{0};
   };
 
+  bool buildGuidePath(const nav_msgs::msg::Path & path, GuidePath & guide) const;
   bool buildWaypoints(
-    const nav_msgs::msg::Path & path, std::vector<Eigen::Vector3d> & points,
+    const GuidePath & guide, std::vector<Eigen::Vector3d> & points,
     Eigen::VectorXd & times) const;
+  Eigen::Vector3d guidePointAt(const GuidePath & guide, double arc_s) const;
+  GuideProjection projectToGuide(
+    const GuidePath & guide, const Eigen::Vector3d & point, double hint_s,
+    double search_radius) const;
+  void assignSegmentTimes(
+    const std::vector<Eigen::Vector3d> & points, Eigen::VectorXd & times) const;
+  void smoothSegmentTimes(Eigen::VectorXd & times) const;
   int optimizeWaypoints(
-    std::vector<Eigen::Vector3d> & points, Eigen::VectorXd & times,
+    std::vector<Eigen::Vector3d> & points, const GuidePath & guide, Eigen::VectorXd & times,
     const nav2_costmap_2d::Costmap2D * costmap,
     const std::vector<DynamicObstacle> * dynamic_obstacles,
     double w_energy, double w_reference, double w_obstacle,
@@ -195,11 +213,11 @@ private:
   double segmentTime(
     const Eigen::Vector3d & prev, const Eigen::Vector3d & current,
     const Eigen::Vector3d & next) const;
-	  double anglePenalty(
-	    const Eigen::Vector3d & prev, const Eigen::Vector3d & current,
-	    const Eigen::Vector3d & next) const;
-	  nav_msgs::msg::Path sampleTrajectory(
-	    const nav_msgs::msg::Path & reference, const Trajectory<5> & traj) const;
+  double anglePenalty(
+    const Eigen::Vector3d & prev, const Eigen::Vector3d & current,
+    const Eigen::Vector3d & next) const;
+  nav_msgs::msg::Path sampleTrajectory(
+    const nav_msgs::msg::Path & reference, const Trajectory<5> & traj) const;
 
   Options options_;
   plan_env::GridMap::Ptr esdf_map_;

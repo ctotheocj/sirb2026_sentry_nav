@@ -220,9 +220,13 @@ void MpcController::sampleMincoHorizon(
   double t_proj,
   double ref_time_scale)
 {
-  // 沿 MINCO 轨迹按控制周期采样位置和速度，同时叠加刹停距离速度限制。
+  // 沿 MINCO 轨迹按缩放后的控制周期采样位置和速度，同时叠加刹停与曲率速度限制。
+  const double time_scale = std::clamp(ref_time_scale, 0.05, 1.0);
+  last_ref_time_scale_ = time_scale;
+  last_min_curvature_speed_limit_ = v_ref_max_effective_;
   const double t_cur = std::min(t_proj + cmd_lookahead_sec_, ctx.traj_dur);
   const double a_brake = std::max(0.5, ax_max_ * brake_safety_factor_);
+  const double a_lat = std::max(0.1, lateral_accel_limit_);
   horizon_speed_limits_.resize(horizon_);
 
   std::vector<double> arc_times;
@@ -266,7 +270,9 @@ void MpcController::sampleMincoHorizon(
     };
 
   for (int i = 0; i < horizon_; ++i) {
-    double t_q = std::min(t_cur + static_cast<double>(i + 1) * control_dt_, ctx.traj_dur);
+    double t_q = std::min(
+      t_cur + static_cast<double>(i + 1) * control_dt_ * time_scale,
+      ctx.traj_dur);
     Eigen::Vector3d pos = ctx.traj.getPos(t_q);
     tf2::Vector3 pos_odom = ctx.map_to_odom * tf2::Vector3(pos.x(), pos.y(), pos.z());
     ref.push_back({pos_odom.x(), pos_odom.y()});
@@ -278,11 +284,24 @@ void MpcController::sampleMincoHorizon(
       Eigen::Vector3d vel = ctx.traj.getVel(t_q);
       tf2::Vector3 vel_odom = ctx.map_to_odom.getBasis() *
         tf2::Vector3(vel.x(), vel.y(), vel.z());
+      Eigen::Vector3d acc = ctx.traj.getAcc(t_q);
+      tf2::Vector3 acc_odom = ctx.map_to_odom.getBasis() *
+        tf2::Vector3(acc.x(), acc.y(), acc.z());
       double remaining = std::max(0.0, remainingDistanceAt(t_q));
       double v_brake = std::sqrt(2.0 * a_brake * remaining);
       double v_mag = std::hypot(vel_odom.x(), vel_odom.y());
+      double v_curv = v_ref_max_effective_;
+      if (curvature_speed_limit_enabled_ && v_mag > curvature_speed_limit_min_speed_) {
+        const double cross =
+          std::abs(vel_odom.x() * acc_odom.y() - vel_odom.y() * acc_odom.x());
+        const double kappa = cross / std::max(v_mag * v_mag * v_mag, 1.0e-6);
+        if (std::isfinite(kappa) && kappa > 1.0e-6) {
+          v_curv = std::sqrt(a_lat / kappa);
+        }
+      }
+      last_min_curvature_speed_limit_ = std::min(last_min_curvature_speed_limit_, v_curv);
       double v_track = std::min(v_mag, v_ref_max_effective_);
-      double v_eff = std::min(v_brake, v_track) * ref_time_scale;
+      double v_eff = std::min({v_brake, v_track, v_curv}) * time_scale;
       double scale = (v_mag > v_eff && v_mag > 1e-6) ? v_eff / v_mag : 1.0;
       v_ref_.push_back({vel_odom.x() * scale, vel_odom.y() * scale});
       horizon_speed_limits_[i] = std::min(v_ref_max_effective_, v_eff + ax_max_ * control_dt_);
@@ -293,6 +312,8 @@ void MpcController::samplePathFallback(double r_x, double r_y, double ref_time_s
 {
   // 在没有可执行 MINCO 时沿全局路径按弧长采样，主要用于预览或允许 fallback 的场景。
   auto node = node_.lock();
+  const double time_scale = std::clamp(ref_time_scale, 0.05, 1.0);
+  last_ref_time_scale_ = time_scale;
 
   if (node) RCLCPP_INFO_THROTTLE(node->get_logger(), *clock_, 1000,
     "generateRef: using arc-length fallback (path_pts=%zu)", global_plan_odom_.poses.size());
@@ -327,7 +348,7 @@ void MpcController::samplePathFallback(double r_x, double r_y, double ref_time_s
     const double step_min_v = constants::kMinStepSize / std::max(control_dt_, 1.0e-3);
     const double fallback_min_v = std::min(fallback_sample_speed_, step_min_v);
     step_v = std::clamp(step_v, fallback_min_v, v_ref_max_);
-    const double step_i = std::max(step_v * control_dt_, constants::kMinStepSize);
+    const double step_i = std::max(step_v * control_dt_ * time_scale, constants::kMinStepSize);
 
     double target_dist = s_cur + step_i;
     s_cur = target_dist;
@@ -366,7 +387,7 @@ void MpcController::samplePathFallback(double r_x, double r_y, double ref_time_s
     double dist_to_goal = path_total_dist_ - target_dist;
     double a_brake = std::max(0.5, ax_max_ * brake_safety_factor_);
     v_ref_val = std::min(v_ref_val, std::sqrt(2.0 * a_brake * std::max(dist_to_goal, 0.0)));
-    v_ref_val = std::min(v_ref_val, v_ref_max_effective_) * ref_time_scale;
+    v_ref_val = std::min(v_ref_val, v_ref_max_effective_) * time_scale;
     if (enable_goal_slowdown_ && dist_to_goal < goal_slowdown_distance_) {
       v_ref_val *= std::max(0.05, dist_to_goal / goal_slowdown_distance_);
     }
@@ -462,6 +483,8 @@ void MpcController::generateReferenceTrajectory(const tf2::Transform & base_to_o
   double r_x = base_to_odom_tf.getOrigin().x();
   double r_y = base_to_odom_tf.getOrigin().y();
   double ref_time_scale = computeReferenceTimeScale();
+  last_ref_time_scale_ = std::clamp(ref_time_scale, 0.05, 1.0);
+  last_min_curvature_speed_limit_ = v_ref_max_effective_;
 
   if (sampleMincoReference(r_x, r_y, ref_time_scale)) {
     reference_uses_minco_ = true;

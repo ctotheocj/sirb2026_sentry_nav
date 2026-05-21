@@ -243,8 +243,20 @@ void HolePassController::executePassHole(
   const auto goal = goal_handle->get_goal();
   HoleDefinition action_hole;
   action_hole.id = goal->hole_id;
-  action_hole.port_a_polygon = squareAroundPose(goal->entry_pose, 0.18);
-  action_hole.port_b_polygon = squareAroundPose(goal->exit_pose, 0.18);
+  action_hole.port_a_polygon = polygonToVector(goal->entry_polygon);
+  action_hole.port_b_polygon = polygonToVector(goal->exit_polygon);
+  if (!validPolygon(action_hole.port_a_polygon)) {
+    action_hole.port_a_polygon = squareAroundPose(goal->entry_pose, 0.18);
+    RCLCPP_WARN(
+      get_logger(),
+      "[HolePass] entry polygon missing or invalid; falling back to 0.18m square around entry pose");
+  }
+  if (!validPolygon(action_hole.port_b_polygon)) {
+    action_hole.port_b_polygon = squareAroundPose(goal->exit_pose, 0.18);
+    RCLCPP_WARN(
+      get_logger(),
+      "[HolePass] exit polygon missing or invalid; falling back to 0.18m square around exit pose");
+  }
   holes_.clear();
   holes_.push_back(action_hole);
   setStage(Stage::NORMAL, "pass hole action start");
@@ -729,6 +741,46 @@ void HolePassController::publishLatestCommand()
   if (age < command_hold_timeout_sec_) {
     publishVelocity(latest_output_cmd_);
   }
+}
+
+std::vector<double> HolePassController::polygonToVector(
+  const geometry_msgs::msg::PolygonStamped & polygon) const
+{
+  std::vector<double> out;
+  out.reserve(polygon.polygon.points.size() * 2);
+  const std::string source_frame = polygon.header.frame_id.empty() ?
+    global_frame_ : polygon.header.frame_id;
+  geometry_msgs::msg::TransformStamped tf;
+  const bool same_frame = source_frame == global_frame_;
+  if (!same_frame) {
+    try {
+      tf = tf_buffer_->lookupTransform(
+        global_frame_, source_frame, tf2::TimePointZero,
+        tf2::durationFromSec(std::max(0.0, tf_lookup_timeout_sec_)));
+    } catch (const tf2::TransformException & ex) {
+      RCLCPP_WARN(
+        get_logger(), "[HolePass] polygon TF %s -> %s unavailable: %s",
+        source_frame.c_str(), global_frame_.c_str(), ex.what());
+      return {};
+    }
+  }
+  for (const auto & point : polygon.polygon.points) {
+    geometry_msgs::msg::PointStamped src;
+    geometry_msgs::msg::PointStamped dst;
+    src.header.frame_id = source_frame;
+    src.header.stamp = polygon.header.stamp;
+    src.point.x = static_cast<double>(point.x);
+    src.point.y = static_cast<double>(point.y);
+    src.point.z = static_cast<double>(point.z);
+    if (same_frame) {
+      dst = src;
+    } else {
+      tf2::doTransform(src, dst, tf);
+    }
+    out.push_back(dst.point.x);
+    out.push_back(dst.point.y);
+  }
+  return out;
 }
 
 bool HolePassController::pathIntersectsPolygonFrom(

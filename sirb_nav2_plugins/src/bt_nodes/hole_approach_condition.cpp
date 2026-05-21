@@ -81,23 +81,33 @@ BT::NodeStatus HoleApproachCondition::tick()
   }
 
   double prepare_distance = 1.5;
+  double exit_goal_offset = 0.4;
   double alignment_tolerance_deg = 25.0;
   const std::string prepare_param = param_prefix + ".prepare_distance";
+  const std::string exit_goal_offset_param = param_prefix + ".exit_goal_offset";
   const std::string alignment_param = param_prefix + ".alignment_tolerance_deg";
   if (node_->has_parameter(prepare_param)) {
     prepare_distance = node_->get_parameter(prepare_param).as_double();
+  }
+  if (node_->has_parameter(exit_goal_offset_param)) {
+    exit_goal_offset = node_->get_parameter(exit_goal_offset_param).as_double();
   }
   if (node_->has_parameter(alignment_param)) {
     alignment_tolerance_deg = node_->get_parameter(alignment_param).as_double();
   }
   getInput("prepare_distance", prepare_distance);
+  getInput("exit_goal_offset", exit_goal_offset);
   getInput("alignment_tolerance_deg", alignment_tolerance_deg);
   if (!node_->has_parameter(prepare_param)) {
     node_->declare_parameter(prepare_param, prepare_distance);
   }
+  if (!node_->has_parameter(exit_goal_offset_param)) {
+    node_->declare_parameter(exit_goal_offset_param, exit_goal_offset);
+  }
   if (!node_->has_parameter(alignment_param)) {
     node_->declare_parameter(alignment_param, alignment_tolerance_deg);
   }
+  exit_goal_offset = std::max(0.0, exit_goal_offset);
   const double alignment_tolerance = alignment_tolerance_deg * M_PI / 180.0;
   size_t best_idx = 0;
   double best_dist = std::numeric_limits<double>::infinity();
@@ -153,9 +163,13 @@ BT::NodeStatus HoleApproachCondition::tick()
           }
           setOutput("hole_id", hole.id);
           setOutput("entry_port", port == 0 ? std::string("A") : std::string("B"));
-          setOutput("entry_pose", polygonCenterPose(entry, yaw));
-          setOutput("exit_pose", polygonCenterPose(exit, yaw));
-          setOutput("hole_exit_goal", polygonCenterPose(exit, yaw));
+          const auto entry_pose = polygonCenterPose(entry, yaw);
+          const auto exit_pose = polygonCenterPose(exit, yaw);
+          setOutput("entry_pose", entry_pose);
+          setOutput("exit_pose", exit_pose);
+          setOutput("hole_exit_goal", offsetPose(exit_pose, hole_yaw, exit_goal_offset));
+          setOutput("entry_polygon", stampedPolygon(entry));
+          setOutput("exit_polygon", stampedPolygon(exit));
           setOutput("corridor_polygon", corridorPolygon(entry, exit));
           return BT::NodeStatus::SUCCESS;
         }
@@ -398,6 +412,36 @@ geometry_msgs::msg::PoseStamped HoleApproachCondition::polygonCenterPose(
   q.setRPY(0.0, 0.0, yaw);
   pose.pose.orientation = tf2::toMsg(q);
   return pose;
+}
+
+geometry_msgs::msg::PoseStamped HoleApproachCondition::offsetPose(
+  const geometry_msgs::msg::PoseStamped & pose, double yaw, double distance) const
+{
+  auto out = pose;
+  out.header.stamp = node_->now();
+  out.pose.position.x += std::cos(yaw) * distance;
+  out.pose.position.y += std::sin(yaw) * distance;
+  tf2::Quaternion q;
+  q.setRPY(0.0, 0.0, yaw);
+  out.pose.orientation = tf2::toMsg(q);
+  return out;
+}
+
+geometry_msgs::msg::PolygonStamped HoleApproachCondition::stampedPolygon(
+  const std::vector<double> & points) const
+{
+  geometry_msgs::msg::PolygonStamped polygon;
+  std::string global_frame = "map";
+  getInput("global_frame", global_frame);
+  polygon.header.frame_id = global_frame;
+  polygon.header.stamp = node_->now();
+  for (size_t i = 0; i + 1 < points.size(); i += 2) {
+    geometry_msgs::msg::Point32 p;
+    p.x = static_cast<float>(points[i]);
+    p.y = static_cast<float>(points[i + 1]);
+    polygon.polygon.points.push_back(p);
+  }
+  return polygon;
 }
 
 geometry_msgs::msg::PolygonStamped HoleApproachCondition::corridorPolygon(

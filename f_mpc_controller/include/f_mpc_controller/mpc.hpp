@@ -24,8 +24,6 @@ class MPC
 {
 public:
   MPC(double dt, int horizon,
-      double vx_min, double vx_max,
-      double vy_min, double vy_max,
       double QX, double QY, double R, double S,
       double terminal_weight = 5.0, int terminal_horizon = 2,
       double Qv = 0.5,
@@ -63,8 +61,8 @@ public:
     has_last_dual_ = false;
     last_U_.setZero();
   }
-  void setLastExecutedU(double vx, double vy) {
-    last_executed_u_ = Eigen::Vector2d(vx, vy);
+  void setControlAnchorU(double vx, double vy) {
+    control_anchor_u_ = Eigen::Vector2d(vx, vy);
   }
   const Eigen::VectorXd & getLastU() const { return last_U_; }
   int getActiveObstacleCount() const { return active_obs_count_; }
@@ -89,7 +87,7 @@ private:
   Eigen::SparseMatrix<double> A_sparse_;
 
   Eigen::VectorXd last_U_;
-  Eigen::Vector2d last_executed_u_ = Eigen::Vector2d::Zero();
+  Eigen::Vector2d control_anchor_u_ = Eigen::Vector2d::Zero();
   bool has_last_solution_{false};
   Eigen::VectorXd last_dual_;
   bool has_last_dual_{false};

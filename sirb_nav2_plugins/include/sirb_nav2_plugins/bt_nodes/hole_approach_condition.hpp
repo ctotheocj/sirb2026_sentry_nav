@@ -29,6 +29,7 @@ public:
       BT::InputPort<std::string>("global_frame", "map", "Global frame"),
       BT::InputPort<std::string>("robot_frame", "gimbal_yaw_fake", "Robot frame"),
       BT::InputPort<double>("prepare_distance", 1.5, "Lookahead distance to hole entry"),
+      BT::InputPort<double>("exit_goal_offset", 0.4, "Distance beyond exit port for hole exit goal"),
       BT::InputPort<double>("alignment_tolerance_deg", 25.0, "Max path/port direction error"),
       BT::InputPort<double>("trajectory_max_age", 0.3, "Maximum trajectory age"),
       BT::InputPort<std::string>("param_prefix", "hole_pass", "bt_navigator parameter prefix"),
@@ -40,6 +41,8 @@ public:
       BT::OutputPort<geometry_msgs::msg::PoseStamped>("entry_pose", "Entry pose"),
       BT::OutputPort<geometry_msgs::msg::PoseStamped>("exit_pose", "Exit pose"),
       BT::OutputPort<geometry_msgs::msg::PoseStamped>("hole_exit_goal", "Goal past the hole"),
+      BT::OutputPort<geometry_msgs::msg::PolygonStamped>("entry_polygon", "Selected entry port polygon"),
+      BT::OutputPort<geometry_msgs::msg::PolygonStamped>("exit_polygon", "Selected exit port polygon"),
       BT::OutputPort<geometry_msgs::msg::PolygonStamped>("corridor_polygon", "Hole corridor"),
     };
   }
@@ -69,6 +72,9 @@ private:
     double cx, double cy, double dx, double dy, double * t) const;
   double distancePointToSegment(double px, double py, double ax, double ay, double bx, double by) const;
   geometry_msgs::msg::PoseStamped polygonCenterPose(const std::vector<double> & polygon, double yaw) const;
+  geometry_msgs::msg::PoseStamped offsetPose(
+    const geometry_msgs::msg::PoseStamped & pose, double yaw, double distance) const;
+  geometry_msgs::msg::PolygonStamped stampedPolygon(const std::vector<double> & polygon) const;
   geometry_msgs::msg::PolygonStamped corridorPolygon(
     const std::vector<double> & a, const std::vector<double> & b) const;
   double polygonCenterX(const std::vector<double> & polygon) const;

@@ -105,6 +105,20 @@ bool NavigationModeManagerNode::enterHolePass(
     ok = callSetBool(replan_suppression_service_, true) && ok;
   }
 
+  if (!ok) {
+    const bool rollback_ok = applyNormalModeServices();
+    hole_mode_active_ = false;
+    active_owner_id_.clear();
+    active_hole_id_.clear();
+    active_deadline_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+    setHoleModeBlackboardHint(false);
+    message = rollback_ok ?
+      "failed to enter hole_pass mode; rolled back to normal" :
+      "failed to enter hole_pass mode; rollback to normal was degraded";
+    RCLCPP_ERROR(get_logger(), "%s", message.c_str());
+    return false;
+  }
+
   hole_mode_active_ = true;
   active_owner_id_ = request.owner_id;
   active_hole_id_ = request.hole_id;
@@ -112,9 +126,7 @@ bool NavigationModeManagerNode::enterHolePass(
     static_cast<double>(request.watchdog_timeout_sec) : default_watchdog_timeout_sec_;
   active_deadline_ = now() + rclcpp::Duration::from_seconds(std::max(0.5, timeout));
   setHoleModeBlackboardHint(true);
-  message = ok ? "entered hole_pass mode" : "entered hole_pass mode with degraded services";
-  RCLCPP_WARN_EXPRESSION(
-    get_logger(), !ok, "NavigationModeManager entered degraded hole_pass mode");
+  message = "entered hole_pass mode";
   return ok;
 }
 
@@ -131,6 +143,21 @@ bool NavigationModeManagerNode::restoreNormal(const std::string & owner_id, std:
     return false;
   }
 
+  const bool ok = applyNormalModeServices();
+
+  hole_mode_active_ = false;
+  active_owner_id_.clear();
+  active_hole_id_.clear();
+  active_deadline_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+  setHoleModeBlackboardHint(false);
+  message = ok ? "restored normal mode" : "restored normal mode with degraded services";
+  RCLCPP_WARN_EXPRESSION(
+    get_logger(), !ok, "NavigationModeManager restored degraded normal mode");
+  return ok;
+}
+
+bool NavigationModeManagerNode::applyNormalModeServices()
+{
   bool ok = true;
   if (use_semantic_layer_mode_) {
     geometry_msgs::msg::Polygon empty;
@@ -152,15 +179,6 @@ bool NavigationModeManagerNode::restoreNormal(const std::string & owner_id, std:
   if (!replan_suppression_service_.empty()) {
     ok = callSetBool(replan_suppression_service_, false) && ok;
   }
-
-  hole_mode_active_ = false;
-  active_owner_id_.clear();
-  active_hole_id_.clear();
-  active_deadline_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
-  setHoleModeBlackboardHint(false);
-  message = ok ? "restored normal mode" : "restored normal mode with degraded services";
-  RCLCPP_WARN_EXPRESSION(
-    get_logger(), !ok, "NavigationModeManager restored degraded normal mode");
   return ok;
 }
 

@@ -18,6 +18,7 @@
 #include <memory>
 #include <string>
 
+#include "geometry_msgs/msg/twist.hpp"
 #include "message_filters/subscriber.h"
 #include "message_filters/sync_policies/approximate_time.h"
 #include "message_filters/synchronizer.h"
@@ -50,8 +51,12 @@ private:
     const std::string & child_frame, const rclcpp::Time & stamp);
 
   void publishOdometry(
-    const tf2::Transform & transform, std::string parent_frame, const std::string & child_frame,
-    const rclcpp::Time & stamp);
+    const tf2::Transform & transform, const tf2::Transform & linear_reference_transform,
+    std::string parent_frame, const std::string & child_frame, const rclcpp::Time & stamp);
+
+  geometry_msgs::msg::Twist estimateRobotTwist(
+    const tf2::Transform & transform, const tf2::Transform & linear_reference_transform,
+    const rclcpp::Time & stamp) const;
 
   tf2::Transform makePlanarBaseTransform(const tf2::Transform & transform) const;
 
@@ -101,6 +106,7 @@ private:
   bool has_lidar_to_chassis_{false};
   bool has_lidar_to_robot_base_{false};
   tf2::Transform previous_odometry_transform_;
+  tf2::Transform previous_linear_reference_transform_;
   rclcpp::Time previous_odometry_stamp_;
   bool has_previous_odometry_{false};
 

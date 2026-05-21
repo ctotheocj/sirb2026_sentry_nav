@@ -2,6 +2,8 @@ string hole_id
 string entry_port
 geometry_msgs/PoseStamped entry_pose
 geometry_msgs/PoseStamped exit_pose
+geometry_msgs/PolygonStamped entry_polygon
+geometry_msgs/PolygonStamped exit_polygon
 geometry_msgs/PolygonStamped corridor
 float32 timeout_sec
 ---

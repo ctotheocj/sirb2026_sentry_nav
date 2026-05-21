@@ -134,6 +134,13 @@ private:
     double r_x,
     double r_y,
     const std::vector<Eigen::Vector2d> & p_prev);
+  void updateMeasuredVelocityAnchor(
+    double vx_global,
+    double vy_global,
+    const rclcpp::Time & now,
+    double odom_age_sec);
+  void updateMpcVelocityAnchor();
+  double currentVelocityAnchorSpeed() const;
   void applyHorizonSpeedLimitFloor();
   SolveResult solveMpcWithFallbacks(double r_x, double r_y, int active_count);
   bool handleInvalidOrFailedSolve(
@@ -211,6 +218,10 @@ private:
   double goal_stop_distance_{0.10};
   double brake_safety_factor_{0.7};
   double ax_max_{5.0};
+  double ay_max_{5.0};
+  bool curvature_speed_limit_enabled_{true};
+  double lateral_accel_limit_{0.0};
+  double curvature_speed_limit_min_speed_{0.15};
 
   mutable std::mutex plan_mutex_;
 
@@ -259,6 +270,8 @@ private:
   double lateral_error_slow_threshold_{0.30};
   double lateral_error_high_threshold_{0.60};
   double min_lateral_ref_time_scale_{0.60};
+  double last_ref_time_scale_{1.0};
+  double last_min_curvature_speed_limit_{0.0};
 
   std::vector<double> horizon_speed_limits_;  // per-step speed limits for MPC hard constraint
 
@@ -291,6 +304,23 @@ private:
   double max_odom_age_sec_{0.80};
   double max_odom_predict_dt_{0.10};
 
+  bool enable_measured_velocity_anchor_{true};
+  double velocity_anchor_blend_alpha_{0.30};
+  double velocity_anchor_lowpass_alpha_{0.50};
+  double velocity_anchor_max_age_sec_{0.15};
+  double velocity_anchor_max_jump_{1.5};
+  double measured_velocity_raw_x_{0.0};
+  double measured_velocity_raw_y_{0.0};
+  double filtered_velocity_anchor_x_{0.0};
+  double filtered_velocity_anchor_y_{0.0};
+  double velocity_anchor_x_{0.0};
+  double velocity_anchor_y_{0.0};
+  double measured_velocity_anchor_age_sec_{0.0};
+  rclcpp::Time measured_velocity_anchor_time_{0, 0, RCL_ROS_TIME};
+  bool has_measured_velocity_anchor_{false};
+  bool has_filtered_velocity_anchor_{false};
+  bool current_velocity_anchor_valid_{false};
+
   rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::Path>::SharedPtr local_path_pub_;
 
   // Dynamic obstacles from tracker
@@ -305,6 +335,9 @@ private:
   double dynamic_safety_margin_{0.3};
   double robot_radius_{0.2};
   int max_dynamic_obs_{5};
+
+  bool allow_obstacle_retry_without_constraints_{false};
+  bool allow_speed_limit_retry_without_limits_{false};
 
   bool debug_logging_{false};
 

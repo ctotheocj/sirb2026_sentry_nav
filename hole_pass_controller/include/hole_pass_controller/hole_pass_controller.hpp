@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "geometry_msgs/msg/polygon_stamped.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
@@ -102,6 +103,7 @@ private:
   void publishYawTargetMarker(
     const geometry_msgs::msg::PoseStamped & robot_pose, const PathProjection & projection,
     bool visible);
+  std::vector<double> polygonToVector(const geometry_msgs::msg::PolygonStamped & polygon) const;
 
   bool pathIntersectsPolygonFrom(
     size_t start_index, double start_t, const std::vector<double> & polygon, double max_distance,
