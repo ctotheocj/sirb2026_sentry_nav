@@ -8,8 +8,9 @@
         <HolePassModeController global_frame="map"
                                 robot_frame="gimbal_yaw_fake"
                                 param_prefix="hole_pass"
+                                goals="{goals}"
                                 mode_service="navigation_mode_manager/set_navigation_mode"
-                                watchdog_timeout_sec="30.0"
+                                mode_status_service="navigation_mode_manager/get_navigation_mode"
                                 refresh_period_sec="0.05"/>
         <RateController hz="1.0">
           <RecoveryNode name="ComputePathThroughPoses"

@@ -366,7 +366,7 @@ def generate_launch_description():
     )
 
     load_sensor_scan_generation_composable = LoadComposableNodes(
-        condition=IfCondition(PythonExpression(["not ", slam])),
+        condition=IfCondition(PythonExpression([use_composition, " and not ", slam])),
         target_container=container_name_full,
         composable_node_descriptions=[
             ComposableNode(

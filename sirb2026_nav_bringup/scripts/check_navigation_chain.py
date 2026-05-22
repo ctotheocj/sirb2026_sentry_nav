@@ -237,12 +237,22 @@ SERVICE_CHECKS = (
     ServiceCheck(
         "navigation_mode_manager/set_navigation_mode",
         "sentry_nav_interfaces/srv/SetNavigationMode",
-        note="BT RAII hole-pass mode manager",
+        note="BT hole-pass mode manager command service",
+    ),
+    ServiceCheck(
+        "navigation_mode_manager/get_navigation_mode",
+        "sentry_nav_interfaces/srv/GetNavigationMode",
+        note="BT hole-pass mode manager state service",
     ),
     ServiceCheck(
         "global_costmap/occupancy_grid_layer/set_semantic_layer_mode",
         "sentry_nav_interfaces/srv/SetSemanticLayerMode",
         note="global occupancy_grid obstacle-layer suppression service",
+    ),
+    ServiceCheck(
+        "local_costmap/occupancy_grid_layer/set_semantic_layer_mode",
+        "sentry_nav_interfaces/srv/SetSemanticLayerMode",
+        note="local occupancy_grid obstacle-layer suppression service",
     ),
 )
 

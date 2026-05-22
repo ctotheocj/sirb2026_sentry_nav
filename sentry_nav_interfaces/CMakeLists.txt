@@ -19,6 +19,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/TimestampedPath.msg"
   "msg/MincoTrajectory.msg"
   "msg/HolePassCmd.msg"
+  "srv/GetNavigationMode.srv"
   "srv/SetNavigationMode.srv"
   "srv/SetSemanticLayerMode.srv"
   "action/GenerateMincoCandidate.action"

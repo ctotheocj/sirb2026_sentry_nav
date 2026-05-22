@@ -1,0 +1,7 @@
+---
+bool active
+string mode
+string owner_id
+string hole_id
+uint8 hole_cmd
+float32 v_yaw

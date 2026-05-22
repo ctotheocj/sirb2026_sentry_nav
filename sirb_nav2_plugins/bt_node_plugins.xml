@@ -26,7 +26,7 @@
   </class>
   <class type="sirb_nav2_plugins::HolePassModeController" base_class_type="BT::ActionNodeBase">
     <description>
-      机器人进入洞的任一端口区域时切换过洞语义模式，到达另一端口区域后发送上升指令并恢复普通模式，不接管 FollowPath 控制。
+      机器人位于洞口且当前导航目标指向对侧端口时切换过洞语义模式，到达另一端口区域后发送上升指令并恢复普通模式，不接管 FollowPath 控制。
     </description>
   </class>
   <class type="sirb_nav2_plugins::CommitTrajectoryAction" base_class_type="BT::ActionNodeBase">

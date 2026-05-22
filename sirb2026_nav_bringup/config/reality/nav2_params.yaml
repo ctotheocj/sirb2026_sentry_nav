@@ -146,11 +146,12 @@ fake_vel_transform:
 navigation_mode_manager:
   ros__parameters:
     use_sim_time: False
-    semantic_layer_services: "global_costmap/occupancy_grid_layer/set_semantic_layer_mode"
+    semantic_layer_services: "global_costmap/occupancy_grid_layer/set_semantic_layer_mode;local_costmap/occupancy_grid_layer/set_semantic_layer_mode"
     hole_pass_cmd_topic: "mpc/hole_pass_cmd"
     hole_command_publish_period_sec: 0.05
     service_timeout_sec: 0.5
     watchdog_timeout_sec: 8.0
+    watchdog_restore_normal: false
 
 ndt_omp_relocalization:
   ros__parameters:
@@ -294,6 +295,10 @@ bt_navigator:
       yaw_kp: 2.5
       max_v_yaw: 1.8
       raise_duration_sec: 1.0
+      exit_pass_margin: 0.2
+      require_navigation_intent: true
+      min_goal_direction_cos: 0.2
+      min_goal_exit_margin: 0.2
       hole_ids: ["hole_1", "hole_2"]
       holes:
         hole_1:

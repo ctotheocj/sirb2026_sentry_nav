@@ -27,18 +27,19 @@ HolePassModeController::HolePassModeController(
   callback_group_ = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   callback_group_executor_.add_callback_group(callback_group_, node_->get_node_base_interface());
   last_refresh_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+  last_status_sync_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
   raise_start_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
   owner_id_ = name + ":" + std::to_string(reinterpret_cast<std::uintptr_t>(this));
 }
 
 HolePassModeController::~HolePassModeController()
 {
-  exitHoleMode("destruct");
 }
 
 BT::NodeStatus HolePassModeController::tick()
 {
   callback_group_executor_.spin_some();
+  syncActiveModeFromManager();
 
   double robot_x = 0.0;
   double robot_y = 0.0;
@@ -46,23 +47,28 @@ BT::NodeStatus HolePassModeController::tick()
   if (!getRobotPose(robot_x, robot_y, robot_yaw)) {
     if (state_ == ModeState::LOWERING || state_ == ModeState::RAISING) {
       refreshHoleMode(robot_yaw, false);
+      return BT::NodeStatus::RUNNING;
     }
     return BT::NodeStatus::SUCCESS;
   }
 
   if (state_ == ModeState::LOWERING) {
-    if (pointInPolygon(robot_x, robot_y, active_exit_polygon_)) {
+    const bool have_active_geometry =
+      validPolygon(active_entry_polygon_) && validPolygon(active_exit_polygon_);
+    if (have_active_geometry && exitReached(robot_x, robot_y)) {
       if (!startRaise(robot_yaw)) {
         return BT::NodeStatus::FAILURE;
       }
     } else {
-      refreshHoleMode(robot_yaw, true);
+      refreshHoleMode(robot_yaw, have_active_geometry);
     }
     return BT::NodeStatus::SUCCESS;
   }
 
   if (state_ == ModeState::RAISING) {
-    refreshHoleMode(robot_yaw, true);
+    const bool have_active_geometry =
+      validPolygon(active_entry_polygon_) && validPolygon(active_exit_polygon_);
+    refreshHoleMode(robot_yaw, have_active_geometry);
     const double raise_duration_sec = parameterOrInput("raise_duration_sec", 1.0);
     if (raise_start_time_.nanoseconds() != 0 &&
       (node_->now() - raise_start_time_).seconds() >= std::max(0.0, raise_duration_sec))
@@ -80,7 +86,10 @@ BT::NodeStatus HolePassModeController::tick()
     return BT::NodeStatus::SUCCESS;
   }
 
-  const auto trigger = findTrigger(loadHoles(), robot_x, robot_y);
+  double target_x = 0.0;
+  double target_y = 0.0;
+  const bool have_target = getNavigationTarget(target_x, target_y);
+  const auto trigger = findTrigger(loadHoles(), robot_x, robot_y, have_target, target_x, target_y);
   if (trigger.valid) {
     if (!enterHoleMode(trigger, robot_yaw)) {
       return BT::NodeStatus::FAILURE;
@@ -91,7 +100,6 @@ BT::NodeStatus HolePassModeController::tick()
 
 void HolePassModeController::halt()
 {
-  exitHoleMode("halt");
   resetStatus();
 }
 
@@ -140,7 +148,10 @@ std::vector<HolePassModeController::Hole> HolePassModeController::loadHoles()
 HolePassModeController::Trigger HolePassModeController::findTrigger(
   const std::vector<Hole> & holes,
   double robot_x,
-  double robot_y)
+  double robot_y,
+  bool have_target,
+  double target_x,
+  double target_y)
 {
   Trigger trigger;
   if (holes.empty()) {
@@ -156,9 +167,16 @@ HolePassModeController::Trigger HolePassModeController::findTrigger(
 
     const auto & entry = in_a ? hole.a : hole.b;
     const auto & exit = in_a ? hole.b : hole.a;
+    if (boolParameterOrInput("require_navigation_intent", true) &&
+      (!have_target || !triggerMatchesNavigationIntent(entry, exit, target_x, target_y)))
+    {
+      continue;
+    }
+
     trigger.valid = true;
     trigger.hole_id = hole.id;
     trigger.entry_port = in_a ? "A" : "B";
+    trigger.exit_port = in_a ? "B" : "A";
     trigger.entry_polygon = entry;
     trigger.exit_polygon = exit;
     trigger.path_yaw = std::atan2(
@@ -187,23 +205,221 @@ bool HolePassModeController::getRobotPose(double & x, double & y, double & yaw)
   }
 }
 
+bool HolePassModeController::getNavigationTarget(double & x, double & y)
+{
+  geometry_msgs::msg::PoseStamped goal;
+  if (getInput("goal", goal) && !goal.header.frame_id.empty()) {
+    x = goal.pose.position.x;
+    y = goal.pose.position.y;
+    return true;
+  }
+
+  std::vector<geometry_msgs::msg::PoseStamped> goals;
+  if (getInput("goals", goals) && !goals.empty()) {
+    for (auto it = goals.rbegin(); it != goals.rend(); ++it) {
+      if (!it->header.frame_id.empty()) {
+        x = it->pose.position.x;
+        y = it->pose.position.y;
+        return true;
+      }
+    }
+    x = goals.back().pose.position.x;
+    y = goals.back().pose.position.y;
+    return true;
+  }
+
+  return false;
+}
+
+bool HolePassModeController::syncActiveModeFromManager()
+{
+  double status_refresh_period_sec = 0.25;
+  getInput("status_refresh_period_sec", status_refresh_period_sec);
+  if (last_status_sync_time_.nanoseconds() != 0 &&
+    (node_->now() - last_status_sync_time_).seconds() <
+    std::max(0.05, status_refresh_period_sec))
+  {
+    return true;
+  }
+  last_status_sync_time_ = node_->now();
+
+  sentry_nav_interfaces::srv::GetNavigationMode::Response status;
+  if (!callGetNavigationMode(status)) {
+    return false;
+  }
+  if (!status.active || status.mode != "hole_pass" || status.hole_id.empty()) {
+    if (state_ == ModeState::LOWERING || state_ == ModeState::RAISING) {
+      state_ = ModeState::IDLE;
+      active_hole_id_.clear();
+      active_entry_port_.clear();
+      active_exit_port_.clear();
+      active_entry_polygon_.clear();
+      active_exit_polygon_.clear();
+      active_target_yaw_ = 0.0;
+      active_v_yaw_ = 0.0;
+      raise_start_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+    }
+    return true;
+  }
+  const bool same_owner = !status.owner_id.empty() && status.owner_id == owner_id_;
+  const bool was_idle = state_ == ModeState::IDLE;
+  const std::string previous_hole_id = active_hole_id_;
+  active_hole_id_ = status.hole_id;
+  active_v_yaw_ = status.v_yaw;
+  state_ = status.hole_cmd == sentry_nav_interfaces::msg::HolePassCmd::HOLE_RAISE ?
+    ModeState::RAISING : ModeState::LOWERING;
+  Trigger trigger;
+  if (previous_hole_id == status.hole_id &&
+    validPolygon(active_entry_polygon_) && validPolygon(active_exit_polygon_) &&
+    !active_entry_port_.empty() && !active_exit_port_.empty())
+  {
+    trigger.valid = true;
+    trigger.hole_id = active_hole_id_;
+    trigger.entry_port = active_entry_port_;
+    trigger.exit_port = active_exit_port_;
+    trigger.entry_polygon = active_entry_polygon_;
+    trigger.exit_polygon = active_exit_polygon_;
+    trigger.path_yaw = std::atan2(
+      polygonCenterY(active_exit_polygon_) - polygonCenterY(active_entry_polygon_),
+      polygonCenterX(active_exit_polygon_) - polygonCenterX(active_entry_polygon_));
+  } else {
+    double robot_x = 0.0;
+    double robot_y = 0.0;
+    double robot_yaw = 0.0;
+    if (!getRobotPose(robot_x, robot_y, robot_yaw)) {
+      RCLCPP_WARN_THROTTLE(
+        node_->get_logger(), *node_->get_clock(), 1000,
+        "HolePassModeController: manager is active for hole='%s' but TF is unavailable",
+        status.hole_id.c_str());
+      return false;
+    }
+
+    double target_x = 0.0;
+    double target_y = 0.0;
+    const bool have_target = getNavigationTarget(target_x, target_y);
+    if (!inferActiveTriggerFromManager(
+        status.hole_id, status.hole_cmd, robot_x, robot_y, have_target, target_x, target_y,
+        trigger))
+    {
+      return false;
+    }
+  }
+
+  active_entry_port_ = trigger.entry_port;
+  active_exit_port_ = trigger.exit_port;
+  active_entry_polygon_ = trigger.entry_polygon;
+  active_exit_polygon_ = trigger.exit_polygon;
+  const double yaw_offset_deg = parameterOrInput("yaw_offset_deg", 0.0);
+  active_target_yaw_ = normalizeAngle(trigger.path_yaw + yaw_offset_deg * M_PI / 180.0);
+  if (!same_owner || was_idle) {
+    last_refresh_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+  }
+  if (state_ == ModeState::RAISING && raise_start_time_.nanoseconds() == 0) {
+    raise_start_time_ = node_->now();
+  } else if (state_ == ModeState::LOWERING) {
+    raise_start_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+  }
+  if (same_owner) {
+    return true;
+  }
+
+  if (callSetNavigationMode(
+      "hole_pass", active_hole_id_, status.hole_cmd, active_v_yaw_))
+  {
+    RCLCPP_WARN(
+      node_->get_logger(),
+      "HolePassModeController: resumed active hole_pass hole='%s' entry='%s' exit='%s' cmd=%u",
+      active_hole_id_.c_str(), active_entry_port_.c_str(), active_exit_port_.c_str(),
+      static_cast<unsigned>(status.hole_cmd));
+    last_refresh_time_ = node_->now();
+    return true;
+  }
+
+  return false;
+}
+
+bool HolePassModeController::inferActiveTriggerFromManager(
+  const std::string & hole_id,
+  uint8_t hole_cmd,
+  double robot_x,
+  double robot_y,
+  bool have_target,
+  double target_x,
+  double target_y,
+  Trigger & trigger)
+{
+  const auto fill_trigger = [&](const Hole & hole, bool a_to_b) {
+      trigger.valid = true;
+      trigger.hole_id = hole.id;
+      trigger.entry_port = a_to_b ? "A" : "B";
+      trigger.exit_port = a_to_b ? "B" : "A";
+      trigger.entry_polygon = a_to_b ? hole.a : hole.b;
+      trigger.exit_polygon = a_to_b ? hole.b : hole.a;
+      trigger.path_yaw = std::atan2(
+        polygonCenterY(trigger.exit_polygon) - polygonCenterY(trigger.entry_polygon),
+        polygonCenterX(trigger.exit_polygon) - polygonCenterX(trigger.entry_polygon));
+    };
+
+  for (const auto & hole : loadHoles()) {
+    if (hole.id != hole_id) {
+      continue;
+    }
+
+    if (have_target) {
+      if (triggerMatchesNavigationIntent(hole.a, hole.b, target_x, target_y)) {
+        fill_trigger(hole, true);
+        return true;
+      }
+      if (triggerMatchesNavigationIntent(hole.b, hole.a, target_x, target_y)) {
+        fill_trigger(hole, false);
+        return true;
+      }
+    }
+
+    const bool in_a = pointInPolygon(robot_x, robot_y, hole.a);
+    const bool in_b = pointInPolygon(robot_x, robot_y, hole.b);
+    if (in_a && !in_b) {
+      fill_trigger(hole, hole_cmd != sentry_nav_interfaces::msg::HolePassCmd::HOLE_RAISE);
+      return true;
+    }
+    if (in_b && !in_a) {
+      fill_trigger(hole, hole_cmd == sentry_nav_interfaces::msg::HolePassCmd::HOLE_RAISE);
+      return true;
+    }
+
+    RCLCPP_WARN_THROTTLE(
+      node_->get_logger(), *node_->get_clock(), 1000,
+      "HolePassModeController: manager is active for hole='%s' but entry/exit direction "
+      "cannot be inferred from current pose and navigation target",
+      hole_id.c_str());
+    return false;
+  }
+
+  RCLCPP_WARN_THROTTLE(
+    node_->get_logger(), *node_->get_clock(), 1000,
+    "HolePassModeController: manager is active for unknown hole='%s'",
+    hole_id.c_str());
+  return false;
+}
+
 bool HolePassModeController::enterHoleMode(const Trigger & trigger, double robot_yaw)
 {
-  double watchdog_timeout_sec = 30.0;
-  getInput("watchdog_timeout_sec", watchdog_timeout_sec);
   const double yaw_offset_deg = parameterOrInput("yaw_offset_deg", 0.0);
   active_target_yaw_ = normalizeAngle(trigger.path_yaw + yaw_offset_deg * M_PI / 180.0);
   active_v_yaw_ = activeVYaw(robot_yaw);
   if (!callSetNavigationMode(
       "hole_pass", trigger.hole_id, sentry_nav_interfaces::msg::HolePassCmd::HOLE_LOWER,
-      active_v_yaw_, watchdog_timeout_sec))
+      active_v_yaw_))
   {
     return false;
   }
 
   state_ = ModeState::LOWERING;
   active_hole_id_ = trigger.hole_id;
+  active_entry_port_ = trigger.entry_port;
+  active_exit_port_ = trigger.exit_port;
   locked_hole_id_.clear();
+  active_entry_polygon_ = trigger.entry_polygon;
   active_exit_polygon_ = trigger.exit_polygon;
   last_refresh_time_ = node_->now();
   raise_start_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
@@ -216,12 +432,10 @@ bool HolePassModeController::enterHoleMode(const Trigger & trigger, double robot
 
 bool HolePassModeController::startRaise(double robot_yaw)
 {
-  double watchdog_timeout_sec = 30.0;
-  getInput("watchdog_timeout_sec", watchdog_timeout_sec);
   active_v_yaw_ = activeVYaw(robot_yaw);
   if (!callSetNavigationMode(
       "hole_pass", active_hole_id_, sentry_nav_interfaces::msg::HolePassCmd::HOLE_RAISE,
-      active_v_yaw_, watchdog_timeout_sec))
+      active_v_yaw_))
   {
     return false;
   }
@@ -238,12 +452,10 @@ bool HolePassModeController::startRaise(double robot_yaw)
 void HolePassModeController::refreshHoleMode(double robot_yaw, bool update_yaw_command)
 {
   double refresh_period_sec = 0.05;
-  double watchdog_timeout_sec = 30.0;
   const uint8_t hole_cmd = state_ == ModeState::RAISING ?
     sentry_nav_interfaces::msg::HolePassCmd::HOLE_RAISE :
     sentry_nav_interfaces::msg::HolePassCmd::HOLE_LOWER;
   getInput("refresh_period_sec", refresh_period_sec);
-  getInput("watchdog_timeout_sec", watchdog_timeout_sec);
   if (last_refresh_time_.nanoseconds() != 0 &&
     (node_->now() - last_refresh_time_).seconds() < std::max(0.01, refresh_period_sec))
   {
@@ -252,7 +464,9 @@ void HolePassModeController::refreshHoleMode(double robot_yaw, bool update_yaw_c
   if (update_yaw_command) {
     active_v_yaw_ = activeVYaw(robot_yaw);
   }
-  if (callSetNavigationMode("hole_pass", active_hole_id_, hole_cmd, active_v_yaw_, watchdog_timeout_sec)) {
+  if (callSetNavigationMode(
+      "hole_pass", active_hole_id_, hole_cmd, active_v_yaw_))
+  {
     last_refresh_time_ = node_->now();
   }
 }
@@ -264,7 +478,7 @@ void HolePassModeController::exitHoleMode(const char * reason)
   }
   const bool wait_until_clear = std::string(reason) == "raise complete";
   const bool restored = callSetNavigationMode(
-    "normal", "", sentry_nav_interfaces::msg::HolePassCmd::HOLE_RAISE, 0.0, 0.0);
+    "normal", "", sentry_nav_interfaces::msg::HolePassCmd::HOLE_RAISE, 0.0);
   if (!restored && wait_until_clear) {
     RCLCPP_WARN(
       node_->get_logger(),
@@ -276,8 +490,11 @@ void HolePassModeController::exitHoleMode(const char * reason)
   state_ = wait_until_clear ? ModeState::WAIT_CLEAR : ModeState::IDLE;
   locked_hole_id_ = wait_until_clear ? active_hole_id_ : "";
   active_hole_id_.clear();
+  active_entry_port_.clear();
+  active_exit_port_.clear();
   active_target_yaw_ = 0.0;
   active_v_yaw_ = 0.0;
+  active_entry_polygon_.clear();
   active_exit_polygon_.clear();
   raise_start_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
 }
@@ -294,6 +511,66 @@ bool HolePassModeController::lockedHoleCleared(double robot_x, double robot_y) c
     return !pointInPolygon(robot_x, robot_y, hole.a) && !pointInPolygon(robot_x, robot_y, hole.b);
   }
   return true;
+}
+
+bool HolePassModeController::exitReached(double robot_x, double robot_y)
+{
+  if (pointInPolygon(robot_x, robot_y, active_exit_polygon_)) {
+    return true;
+  }
+  if (!validPolygon(active_entry_polygon_) || !validPolygon(active_exit_polygon_)) {
+    return false;
+  }
+
+  const double entry_x = polygonCenterX(active_entry_polygon_);
+  const double entry_y = polygonCenterY(active_entry_polygon_);
+  const double exit_x = polygonCenterX(active_exit_polygon_);
+  const double exit_y = polygonCenterY(active_exit_polygon_);
+  const double path_x = exit_x - entry_x;
+  const double path_y = exit_y - entry_y;
+  const double path_norm = std::hypot(path_x, path_y);
+  if (path_norm < kEps) {
+    return false;
+  }
+
+  const double progress =
+    ((robot_x - entry_x) * path_x + (robot_y - entry_y) * path_y) / path_norm;
+  const double exit_progress = path_norm;
+  const double exit_pass_margin = std::max(0.0, parameterOrInput("exit_pass_margin", 0.2));
+  return progress > exit_progress + exit_pass_margin;
+}
+
+bool HolePassModeController::triggerMatchesNavigationIntent(
+  const std::vector<double> & entry,
+  const std::vector<double> & exit,
+  double target_x,
+  double target_y)
+{
+  const double entry_x = polygonCenterX(entry);
+  const double entry_y = polygonCenterY(entry);
+  const double exit_x = polygonCenterX(exit);
+  const double exit_y = polygonCenterY(exit);
+  const double path_x = exit_x - entry_x;
+  const double path_y = exit_y - entry_y;
+  const double target_vec_x = target_x - entry_x;
+  const double target_vec_y = target_y - entry_y;
+  const double path_norm = std::hypot(path_x, path_y);
+  const double target_norm = std::hypot(target_vec_x, target_vec_y);
+  if (path_norm < kEps || target_norm < kEps) {
+    return false;
+  }
+
+  const double cos_angle =
+    (path_x * target_vec_x + path_y * target_vec_y) / (path_norm * target_norm);
+  const double min_goal_direction_cos = parameterOrInput("min_goal_direction_cos", 0.2);
+  if (cos_angle < min_goal_direction_cos) {
+    return false;
+  }
+
+  const double entry_dist = std::hypot(target_x - entry_x, target_y - entry_y);
+  const double exit_dist = std::hypot(target_x - exit_x, target_y - exit_y);
+  const double min_goal_exit_margin = std::max(0.0, parameterOrInput("min_goal_exit_margin", 0.2));
+  return exit_dist + min_goal_exit_margin < entry_dist;
 }
 
 double HolePassModeController::activeVYaw(double robot_yaw)
@@ -324,12 +601,24 @@ double HolePassModeController::parameterOrInput(const std::string & key, double 
   return node_->get_parameter(parameter_name).as_double();
 }
 
+bool HolePassModeController::boolParameterOrInput(const std::string & key, bool default_value)
+{
+  bool value = default_value;
+  getInput(key, value);
+
+  const std::string parameter_name = paramPrefix() + "." + key;
+  if (!node_->has_parameter(parameter_name)) {
+    node_->declare_parameter(parameter_name, value);
+  }
+
+  return node_->get_parameter(parameter_name).as_bool();
+}
+
 bool HolePassModeController::callSetNavigationMode(
   const std::string & mode,
   const std::string & hole_id,
   uint8_t hole_cmd,
-  double v_yaw,
-  double watchdog_timeout_sec)
+  double v_yaw)
 {
   std::string service = "navigation_mode_manager/set_navigation_mode";
   double timeout_sec = 0.5;
@@ -354,7 +643,7 @@ bool HolePassModeController::callSetNavigationMode(
   request->hole_id = hole_id;
   request->hole_cmd = hole_cmd;
   request->v_yaw = static_cast<float>(v_yaw);
-  request->watchdog_timeout_sec = static_cast<float>(watchdog_timeout_sec);
+  request->watchdog_timeout_sec = 0.0F;
   auto future = client->async_send_request(request);
   const auto result = callback_group_executor_.spin_until_future_complete(future, timeout);
   if (result != rclcpp::FutureReturnCode::SUCCESS) {
@@ -368,6 +657,36 @@ bool HolePassModeController::callSetNavigationMode(
       service.c_str(), mode.c_str(), response->message.c_str());
     return false;
   }
+  return true;
+}
+
+bool HolePassModeController::callGetNavigationMode(
+  sentry_nav_interfaces::srv::GetNavigationMode::Response & response)
+{
+  std::string service = "navigation_mode_manager/get_navigation_mode";
+  double timeout_sec = 0.5;
+  getInput("mode_status_service", service);
+  getInput("service_timeout", timeout_sec);
+  if (service.empty()) {
+    return false;
+  }
+
+  auto client = node_->create_client<sentry_nav_interfaces::srv::GetNavigationMode>(
+    service, rmw_qos_profile_services_default, callback_group_);
+  const auto timeout = std::chrono::duration<double>(std::max(0.01, timeout_sec));
+  if (!client->wait_for_service(std::chrono::duration_cast<std::chrono::nanoseconds>(timeout))) {
+    return false;
+  }
+
+  auto request = std::make_shared<sentry_nav_interfaces::srv::GetNavigationMode::Request>();
+  auto future = client->async_send_request(request);
+  const auto result = callback_group_executor_.spin_until_future_complete(future, timeout);
+  if (result != rclcpp::FutureReturnCode::SUCCESS) {
+    RCLCPP_WARN(
+      node_->get_logger(), "HolePassModeController: service '%s' timed out", service.c_str());
+    return false;
+  }
+  response = *future.get();
   return true;
 }
 

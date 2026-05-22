@@ -29,6 +29,7 @@ NavigationModeManagerNode::NavigationModeManagerNode(const rclcpp::NodeOptions &
   hole_pass_cmd_topic_ = declare_parameter<std::string>("hole_pass_cmd_topic", "mpc/hole_pass_cmd");
   hole_command_publish_period_sec_ =
     declare_parameter<double>("hole_command_publish_period_sec", 0.05);
+  watchdog_restore_normal_ = declare_parameter<bool>("watchdog_restore_normal", false);
 
   client_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   client_executor_.add_callback_group(client_callback_group_, get_node_base_interface());
@@ -37,6 +38,11 @@ NavigationModeManagerNode::NavigationModeManagerNode(const rclcpp::NodeOptions &
     "navigation_mode_manager/set_navigation_mode",
     std::bind(
       &NavigationModeManagerNode::handleSetMode, this,
+      std::placeholders::_1, std::placeholders::_2));
+  status_service_ = create_service<GetNavigationMode>(
+    "navigation_mode_manager/get_navigation_mode",
+    std::bind(
+      &NavigationModeManagerNode::handleGetMode, this,
       std::placeholders::_1, std::placeholders::_2));
   hole_cmd_pub_ =
     create_publisher<sentry_nav_interfaces::msg::HolePassCmd>(hole_pass_cmd_topic_, 10);
@@ -50,9 +56,9 @@ NavigationModeManagerNode::NavigationModeManagerNode(const rclcpp::NodeOptions &
 
   RCLCPP_INFO(
     get_logger(), "NavigationModeManager ready semantic_services=%zu cmd_topic='%s' "
-    "cmd_period=%.3fs",
+    "cmd_period=%.3fs watchdog_restore_normal=%d",
     semantic_layer_services_.size(), hole_pass_cmd_topic_.c_str(),
-    hole_command_publish_period_sec_);
+    hole_command_publish_period_sec_, watchdog_restore_normal_ ? 1 : 0);
 }
 
 void NavigationModeManagerNode::handleSetMode(
@@ -72,6 +78,19 @@ void NavigationModeManagerNode::handleSetMode(
   response->message = message;
 }
 
+void NavigationModeManagerNode::handleGetMode(
+  const std::shared_ptr<GetNavigationMode::Request>/*request*/,
+  std::shared_ptr<GetNavigationMode::Response> response)
+{
+  response->active = hole_mode_active_;
+  response->mode = hole_mode_active_ ? "hole_pass" : "normal";
+  response->owner_id = active_owner_id_;
+  response->hole_id = active_hole_id_;
+  response->hole_cmd = hole_mode_active_ ?
+    active_hole_cmd_ : sentry_nav_interfaces::msg::HolePassCmd::HOLE_RAISE;
+  response->v_yaw = hole_mode_active_ ? active_v_yaw_ : 0.0F;
+}
+
 bool NavigationModeManagerNode::enterHolePass(
   const SetNavigationMode::Request & request, std::string & message)
 {
@@ -81,11 +100,21 @@ bool NavigationModeManagerNode::enterHolePass(
   }
   if (hole_mode_active_) {
     if (request.owner_id != active_owner_id_) {
-      message = "owner mismatch: active='" + active_owner_id_ + "' request='" + request.owner_id + "'";
-      RCLCPP_WARN(get_logger(), "%s", message.c_str());
-      return false;
+      if (request.hole_id.empty() || request.hole_id != active_hole_id_) {
+        message = "owner mismatch: active='" + active_owner_id_ + "' request='" +
+          request.owner_id + "'";
+        RCLCPP_WARN(get_logger(), "%s", message.c_str());
+        return false;
+      }
+      RCLCPP_WARN(
+        get_logger(),
+        "NavigationModeManager transferring active hole_pass owner '%s' -> '%s' for hole='%s'",
+        active_owner_id_.c_str(), request.owner_id.c_str(), active_hole_id_.c_str());
+      active_owner_id_ = request.owner_id;
     }
-    active_hole_id_ = request.hole_id;
+    if (!request.hole_id.empty()) {
+      active_hole_id_ = request.hole_id;
+    }
     if (validHoleCommand(request.hole_cmd)) {
       active_hole_cmd_ = request.hole_cmd;
     }
@@ -93,6 +122,7 @@ bool NavigationModeManagerNode::enterHolePass(
     const double timeout = request.watchdog_timeout_sec > 0.0F ?
       static_cast<double>(request.watchdog_timeout_sec) : default_watchdog_timeout_sec_;
     active_deadline_ = now() + rclcpp::Duration::from_seconds(std::max(0.5, timeout));
+    watchdog_reported_ = false;
     message = "refreshed hole_pass mode";
     publishHoleCommand();
     return true;
@@ -125,6 +155,7 @@ bool NavigationModeManagerNode::enterHolePass(
   const double timeout = request.watchdog_timeout_sec > 0.0F ?
     static_cast<double>(request.watchdog_timeout_sec) : default_watchdog_timeout_sec_;
   active_deadline_ = now() + rclcpp::Duration::from_seconds(std::max(0.5, timeout));
+  watchdog_reported_ = false;
   message = "entered hole_pass mode";
   publishHoleCommand();
   return ok;
@@ -155,6 +186,7 @@ bool NavigationModeManagerNode::restoreNormal(const std::string & owner_id, std:
   active_owner_id_.clear();
   active_hole_id_.clear();
   active_deadline_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+  watchdog_reported_ = false;
   publishHoleCommand();
   message = "restored normal mode";
   return true;
@@ -177,12 +209,26 @@ void NavigationModeManagerNode::watchdogCallback()
   if (now() <= active_deadline_) {
     return;
   }
-  RCLCPP_ERROR(
-    get_logger(),
-    "NavigationModeManager watchdog restoring normal mode owner='%s' hole='%s'",
-    active_owner_id_.c_str(), active_hole_id_.c_str());
-  std::string message;
-  restoreNormal(active_owner_id_, message);
+  if (watchdog_restore_normal_) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "NavigationModeManager watchdog restoring normal mode owner='%s' hole='%s'",
+      active_owner_id_.c_str(), active_hole_id_.c_str());
+    std::string message;
+    restoreNormal(active_owner_id_, message);
+    return;
+  }
+
+  if (!watchdog_reported_) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "NavigationModeManager watchdog expired, keeping last hole command owner='%s' hole='%s' "
+      "cmd=%u v_yaw=%.3f",
+      active_owner_id_.c_str(), active_hole_id_.c_str(), active_hole_cmd_, active_v_yaw_);
+    watchdog_reported_ = true;
+  }
+  active_deadline_ = now() +
+    rclcpp::Duration::from_seconds(std::max(0.5, default_watchdog_timeout_sec_));
 }
 
 void NavigationModeManagerNode::holeCommandTimerCallback()

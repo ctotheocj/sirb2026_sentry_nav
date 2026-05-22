@@ -46,9 +46,9 @@ The layer also exposes `<layer_name>/set_semantic_layer_mode`
 (`sentry_nav_interfaces/srv/SetSemanticLayerMode`).
 
 The semantic mode service is used by hole-pass logic to suppress this layer while passing
-through configured holes. In the default bringup only the global costmap service is called, so
-global planning ignores the online occupancy-grid obstacle layer while local costmap,
-TrajectoryManager collision checks, MPC, and velocity smoothing keep their normal behavior.
+through configured holes. Default bringup calls both the global and local costmap services, so
+the online occupancy-grid obstacle layer is suppressed in both costmaps while static layers and
+the rest of the control chain stay active.
 
 | Parameter | Default | Notes |
 | --- | --- | --- |
@@ -93,6 +93,10 @@ bt_navigator:
       yaw_kp: 2.5
       max_v_yaw: 1.8
       raise_duration_sec: 1.0
+      exit_pass_margin: 0.2
+      require_navigation_intent: true
+      min_goal_direction_cos: 0.2
+      min_goal_exit_margin: 0.2
       hole_ids: ["hole_1"]
       holes:
         hole_1:
@@ -100,17 +104,27 @@ bt_navigator:
           port_b_polygon: [x1, y1, x2, y2, x3, y3, x4, y4]
 ```
 
-The first port reached is treated as entry and the other port as exit. Entry sends
-`HOLE_LOWER`, switches `navigation_mode_manager` to `hole_pass`, and keeps publishing
-`HolePassCmd` on `mpc/hole_pass_cmd`. Exit sends `HOLE_RAISE`; after `raise_duration_sec` the
-mode returns to `normal`. The controller then waits until the robot leaves both port polygons
-before the same hole can trigger again.
+The first port reached is treated as entry and the other port as exit. With
+`require_navigation_intent` enabled, this only triggers when the active navigation goal is in
+the entry-to-exit direction and closer to the opposite port, so A/B stays unordered and
+bidirectional without lowering for unrelated drive-by motion. Entry sends `HOLE_LOWER`,
+switches `navigation_mode_manager` to `hole_pass`, and keeps publishing `HolePassCmd` on
+`mpc/hole_pass_cmd`. Exit sends `HOLE_RAISE`; after `raise_duration_sec` the mode returns to
+`normal`. The controller then waits until the robot leaves both port polygons before the same
+hole can trigger again.
 
-Default bringup sets `navigation_mode_manager.semantic_layer_services` to only
-`global_costmap/occupancy_grid_layer/set_semantic_layer_mode`. Therefore hole-pass mode
-suppresses only the global costmap `OccupancyGridObstacleLayer`; local costmap, trajectory
-manager collision checking, MPC, velocity smoother, and `fake_vel_transform` stay on the
-normal navigation chain.
+Default bringup sets `navigation_mode_manager.semantic_layer_services` for both global and
+local `occupancy_grid_layer` services. Therefore hole-pass mode suppresses the dynamic
+occupancy-grid obstacle layer in both costmaps; static layers, trajectory manager collision
+checking, MPC, velocity smoother, and `fake_vel_transform` stay on the normal navigation
+chain.
+
+The manager owns the active hole-pass command state. BT halt/destruction and watchdog expiry do
+not restore normal mode by default, so a navigation failure while lowered keeps publishing the
+last desired chassis state instead of raising in the hole. A later BT instance can resume the
+active mode from `navigation_mode_manager/get_navigation_mode`; entry/exit direction is inferred
+again from the configured hole polygons, current pose, and navigation target rather than stored
+inside the generic mode service.
 
 The target chassis heading is computed from entry-port center to exit-port center plus
 `yaw_offset_deg`. `HolePassCmd.v_yaw` is the yaw-rate command in rad/s generated from that
