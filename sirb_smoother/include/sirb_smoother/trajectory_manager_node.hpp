@@ -102,7 +102,8 @@ private:
     double start_time,
     double horizon_sec,
     double & collision_time,
-    int & collision_cost) const;
+    int & collision_cost);
+  bool holePassModeActive() const;
   bool costmapPointIsCollisionFree(
     double wx,
     double wy,
@@ -115,6 +116,7 @@ private:
   rclcpp::Subscription<sentry_nav_interfaces::msg::MincoTrajectory>::SharedPtr traj_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<nav2_msgs::msg::Costmap>::SharedPtr costmap_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr navigation_mode_sub_;
   rclcpp::Publisher<sentry_nav_interfaces::msg::MincoTrajectory>::SharedPtr traj_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
   rclcpp_action::Server<CommitTrajectory>::SharedPtr commit_action_server_;
@@ -146,6 +148,7 @@ private:
   std::string output_topic_{"trajectory_manager/trajectory_for_mpc"};
   std::string odom_topic_{"odometry"};
   std::string costmap_topic_{"local_costmap/costmap_raw"};
+  std::string navigation_mode_topic_{"navigation_mode_manager/mode"};
   double publish_rate_hz_{20.0};
   double active_timeout_sec_{6.0};
   double min_remaining_time_sec_{0.15};
@@ -174,6 +177,7 @@ private:
   bool collision_tf_failure_is_safe_{false};
   bool require_odom_{true};
   int tracking_error_replan_frames_{3};
+  std::atomic_bool hole_pass_mode_active_{false};
 };
 
 }  // namespace sirb_smoother

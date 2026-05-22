@@ -174,6 +174,8 @@ void MpcController::declareParameters(
     rclcpp::ParameterValue(false));
   declare_parameter_if_not_declared(node, plugin_name_ + ".allow_speed_limit_retry_without_limits",
     rclcpp::ParameterValue(false));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".navigation_mode_topic",
+    rclcpp::ParameterValue(std::string("navigation_mode_manager/mode")));
   declare_parameter_if_not_declared(node, plugin_name_ + ".debug_logging",
     rclcpp::ParameterValue(false));
 }
@@ -286,6 +288,7 @@ void MpcController::loadParameters(
   node->get_parameter(
     plugin_name_ + ".allow_speed_limit_retry_without_limits",
     allow_speed_limit_retry_without_limits_);
+  node->get_parameter(plugin_name_ + ".navigation_mode_topic", navigation_mode_topic_);
   node->get_parameter(plugin_name_ + ".debug_logging", debug_logging_);
 }
 
@@ -306,6 +309,13 @@ void MpcController::createRosInterfaces(
   minco_traj_sub_ = node->create_subscription<sentry_nav_interfaces::msg::MincoTrajectory>(
     minco_traj_topic_, rclcpp::QoS(1),
     std::bind(&MpcController::mincoTrajCallback, this, std::placeholders::_1));
+
+  navigation_mode_sub_ = node->create_subscription<std_msgs::msg::String>(
+    navigation_mode_topic_, rclcpp::QoS(10),
+    [this](const std_msgs::msg::String::SharedPtr msg) {
+      std::lock_guard<std::mutex> lk(navigation_mode_mutex_);
+      hole_pass_mode_active_ = msg->data == "hole_pass";
+    });
 
   if (enable_dynamic_obstacle_avoidance_) {
     dyn_obs_sub_ = node->create_subscription<sentry_nav_interfaces::msg::TrackedObstacleArray>(
@@ -388,6 +398,7 @@ void MpcController::cleanup()
   local_path_pub_.reset();
   minco_traj_sub_.reset();
   dyn_obs_sub_.reset();
+  navigation_mode_sub_.reset();
   RCLCPP_INFO(node->get_logger(), "MpcController cleanup");
 }
 
@@ -760,6 +771,16 @@ bool MpcController::checkPredictedCollision(
 {
   // 用 MPC 最新预测轨迹检查代价地图碰撞，持续碰撞时触发上层恢复。
   auto node = node_.lock();
+  if (holePassModeActive()) {
+    collision_stop_since_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    if (node) {
+      RCLCPP_INFO_THROTTLE(
+        node->get_logger(), *clock_, 1000,
+        "MPC predicted collision check skipped in hole_pass mode");
+    }
+    return false;
+  }
+
   auto costmap_ptr = costmap_ros_->getCostmap();
   double px = r_x;
   double py = r_y;
@@ -836,6 +857,12 @@ bool MpcController::checkPredictedCollision(
     throw nav2_core::PlannerException("MPC predicted trajectory remains in collision");
   }
   return true;
+}
+
+bool MpcController::holePassModeActive() const
+{
+  std::lock_guard<std::mutex> lk(navigation_mode_mutex_);
+  return hole_pass_mode_active_;
 }
 
 void MpcController::applyGoalStopProtection(

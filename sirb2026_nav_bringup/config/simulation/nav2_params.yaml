@@ -14,11 +14,11 @@ point_lio:
     prop_at_freq_of_imu: True
     check_satu: True
     init_map_size: 10
-    point_filter_num: 8                                 # Options: 4, 3
+    point_filter_num: 4                                 # keep more scan points for stabler Point-LIO in narrow geometry
     space_down_sample: True
-    filter_size_surf: 0.2                               # Options: 0.5, 0.3, 0.2, 0.15, 0.1
-    filter_size_map: 0.2                                # Options: 0.5, 0.3, 0.15, 0.1
-    ivox_nearby_type: 18                                # Options: 0, 6, 18, 26
+    filter_size_surf: 0.15                              # Options: 0.5, 0.3, 0.2, 0.15, 0.1
+    filter_size_map: 0.15                               # Options: 0.5, 0.3, 0.15, 0.1
+    ivox_nearby_type: 26                                # Options: 0, 6, 18, 26
     runtime_pos_log_enable: False                       # Option: True
 
     common:
@@ -50,18 +50,18 @@ point_lio:
       satu_acc: 30.0                                    # the saturation value of IMU's acceleration. not related to the units
       satu_gyro: 35.0                                   # the saturation value of IMU's angular velocity. not related to the units
       acc_norm: 9.81                                    # 1.0 for g as unit, 9.81 for m/s^2 as unit of the IMU's acceleration
-      lidar_meas_cov: 0.001                             # 0.001
+      lidar_meas_cov: 0.002                             # slightly reduce over-trust in individual scan points
       acc_cov_output: 500.0
       gyr_cov_output: 1000.0
       b_acc_cov: 0.0001
       b_gyr_cov: 0.0001
       imu_meas_acc_cov: 0.1
       imu_meas_omg_cov: 0.1
-      gyr_cov_input: 0.01                               # for IMU as input model
+      gyr_cov_input: 0.02                               # for IMU as input model
       acc_cov_input: 0.1                                # for IMU as input model
-      plane_thr: 0.1                                    # 0.05, the threshold for plane criteria, the smaller, the flatter a plane
+      plane_thr: 0.08                                   # 0.05, the threshold for plane criteria, the smaller, the flatter a plane
       match_s: 81.0
-      ivox_grid_resolution: 0.5
+      ivox_grid_resolution: 0.35
       gravity: [ 0.0, -4.9, -8.487047153776548 ]        # gravity to be aligned # rpy = [0, pi/6, 0]
       gravity_init: [ 0.0, -4.9, -8.487047153776548 ]   # preknown gravity in the first IMU body frame, use when imu_en is False or start from a non-stationary state
       extrinsic_T: [ 0.0, 0.0, 0.0 ]
@@ -85,12 +85,12 @@ point_lio:
 
 motion_profile: #速度，加速度总开关
   ros__parameters:
-    max_speed: 1.5
-    max_accel: 4.0 # desired planning accel; MINCO is clamped by control_accel_limit.
-    control_speed_limit: 2.5
-    control_accel_limit: 3.0
-    tracking_error_soft: 0.3
-    tracking_error_hard: 0.6
+    max_speed: 1.6
+    max_accel: 4.5 # desired planning accel; MINCO is clamped by control_accel_limit.
+    control_speed_limit: 2.2
+    control_accel_limit: 3.4
+    tracking_error_soft: 0.22
+    tracking_error_hard: 0.45
     localization_jump_speed: 7.0
 
 loam_interface:
@@ -158,18 +158,18 @@ navigation_mode_manager:
 ndt_omp_relocalization:
   ros__parameters:
     use_sim_time: true
-    num_threads: 4
-    ndt_resolution: 1.0
-    ndt_step_size: 0.1
+    num_threads: 8
+    ndt_resolution: 0.8
+    ndt_step_size: 0.08
     ndt_epsilon: 0.01
-    ndt_max_iterations: 30
-    ndt_search_method: 1
-    fitness_score_threshold: 1.0
-    registration_period_ms: 300
-    global_leaf_size: 0.20
-    registered_leaf_size: 0.15
+    ndt_max_iterations: 40
+    ndt_search_method: 3
+    fitness_score_threshold: 2.0
+    registration_period_ms: 150
+    global_leaf_size: 0.12
+    registered_leaf_size: 0.12
     min_source_points: 800
-    min_filtered_points: 100
+    min_filtered_points: 120
     max_scan_age_sec: 0.5
     map_frame: map
     odom_frame: odom
@@ -184,15 +184,15 @@ ndt_omp_relocalization:
     - 0.0
     enable_roll_pitch_fix: true
     trust_ndt_threshold: 5
-    jump_threshold_xy: 0.8
-    jump_threshold_yaw: 0.5
-    jump_threshold_rp: 0.2
+    jump_threshold_xy: 0.70
+    jump_threshold_yaw: 0.45
+    jump_threshold_rp: 0.18
     enable_quality_gate: true
-    quality_sample_points: 1500
-    quality_max_corr_dist: 1.0
-    quality_min_valid_correspondences: 100
+    quality_sample_points: 3000
+    quality_max_corr_dist: 1.2
+    quality_min_valid_correspondences: 120
     quality_min_overlap_ratio: 0.30
-    quality_max_median_residual: 0.40
+    quality_max_median_residual: 0.45
     quality_max_p90_residual: 1.2
     publish_tf_only_when_trusted: false
     freeze_tf_when_not_trusted: true
@@ -366,7 +366,7 @@ bt_navigator:
 controller_server:
   ros__parameters:
     odom_topic: odometry
-    controller_frequency: 20.0
+    controller_frequency: 30.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.001
     min_theta_velocity_threshold: 0.001
@@ -389,17 +389,17 @@ controller_server:
     FollowPath:
       plugin: f_mpc_controller::MpcController
       debug_logging: false
-      QX: 60.0
-      QY: 60.0
-      R: 0.02
-      S: 1.5
-      Qv: 2.0
-      horizon: 30
-      control_frequency: 20.0
-      local_plan_publish_period_sec: 0.1
+      QX: 70.0
+      QY: 70.0
+      R: 0.06
+      S: 0.8
+      Qv: 1.2
+      horizon: 32
+      control_frequency: 30.0
+      local_plan_publish_period_sec: 0.08
       v_ref_max: 2.5
       k_curvature: 4.0
-      terminal_weight: 2.0
+      terminal_weight: 4.0
       terminal_horizon: 2
       ax_max: 3.0
       ay_max: 3.0
@@ -414,27 +414,29 @@ controller_server:
       max_odom_age_sec: 0.8
       max_odom_predict_dt: 0.1
       enable_measured_velocity_anchor: true
-      velocity_anchor_blend_alpha: 0.3
-      velocity_anchor_lowpass_alpha: 0.5
-      velocity_anchor_max_age_sec: 0.15
-      velocity_anchor_max_jump: 1.5
+      velocity_anchor_blend_alpha: 0.45
+      velocity_anchor_lowpass_alpha: 0.65
+      velocity_anchor_max_age_sec: 0.20
+      velocity_anchor_max_jump: 2.0
       reject_angle_deg: 180.0
       reject_dist_threshold: 2.0
       max_consecutive_rejects: 5
       enable_goal_slowdown: true
       goal_slowdown_distance: 1.5
-      cmd_lookahead_sec: 0.04
-      minco_projection_max_lag_sec: 0.80
+      cmd_lookahead_sec: 0.02
+      minco_projection_search_ahead_sec: 0.20
+      minco_projection_max_advance_sec: 0.08
+      minco_projection_max_lag_sec: 0.45
       enable_lateral_error_ref_scaling: true
       lateral_error_slow_threshold: 0.3
       lateral_error_high_threshold: 0.6
-      min_lateral_ref_time_scale: 0.6
+      min_lateral_ref_time_scale: 0.45
       enable_pose_jump_damping: true
       pose_jump_distance_threshold: 0.25
       pose_jump_speed_threshold: 7.0
       pose_jump_damping_scale: 0.35
       pose_jump_damping_frames: 6
-      minco_timeout_sec: 0.5
+      minco_timeout_sec: 0.8
       minco_goal_reset_tolerance: 0.5
       reset_warm_start_on_goal_change_only: true
       preserve_warm_start_on_similar_plan: true
@@ -448,9 +450,10 @@ controller_server:
       prevent_tracking_reverse: true
       reverse_guard_min_ref_speed: 0.05
       reverse_guard_allowance: 0.03
-      collision_stop_failure_sec: 0.8
+      collision_stop_failure_sec: 1.0
       allow_obstacle_retry_without_constraints: false
-      allow_speed_limit_retry_without_limits: false
+      allow_speed_limit_retry_without_limits: true
+      navigation_mode_topic: navigation_mode_manager/mode
       enable_dynamic_obstacle_avoidance: false
       dynamic_obstacle_topic: dynamic_obstacles
       dynamic_safety_margin: 0.3
@@ -482,14 +485,14 @@ local_costmap:
         plugin: pb_nav2_costmap_2d::OccupancyGridObstacleLayer
         enabled: true
         topic: <robot_namespace>/occupancy_grid
-        occupied_threshold: 65
+        occupied_threshold: 75
         source_timeout: 0.6
         stamp_source_cell_area: true
         debug_logging: false
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
-        cost_scaling_factor: 4.0
-        inflation_radius: 0.7
+        cost_scaling_factor: 8.0
+        inflation_radius: 0.22
       always_send_full_costmap: false
 
 global_costmap:
@@ -517,14 +520,14 @@ global_costmap:
         plugin: pb_nav2_costmap_2d::OccupancyGridObstacleLayer
         enabled: true
         topic: <robot_namespace>/occupancy_grid
-        occupied_threshold: 65
+        occupied_threshold: 75
         source_timeout: 0.6
         stamp_source_cell_area: true
         debug_logging: false
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
-        inflation_radius: 0.8
-        cost_scaling_factor: 3.0
+        inflation_radius: 0.25
+        cost_scaling_factor: 8.0
       always_send_full_costmap: true
 
 map_server:
@@ -584,7 +587,7 @@ smoother_server:
       minco_w_acceleration: 0.5
       minco_dynamics_sample_dt: 0.08
       minco_dynamic_realloc_max_segment_scale: 8.0
-      min_clearance_for_removal: 0.25
+      min_clearance_for_removal: 0.12
       minco_min_segment_time: 0.15
       minco_max_segment_time: 4.0
       minco_corner_time_weight: 0.25
@@ -592,11 +595,11 @@ smoother_server:
       minco_max_pieces: 60
       minco_use_lbfgs: true
       minco_guide_fillet_enabled: true
-      minco_guide_fillet_radius: 0.60
+      minco_guide_fillet_radius: 0.35
       minco_guide_fillet_min_angle: 0.25
       minco_use_esdf: true
-      minco_esdf_safe_distance: 0.25
-      minco_esdf_influence_distance: 0.8
+      minco_esdf_safe_distance: 0.12
+      minco_esdf_influence_distance: 0.45
       minco_esdf_gradient_step: 0.05
       minco_esdf_valley_threshold: 0.5
       minco_esdf_query_z: 0.3
@@ -615,7 +618,7 @@ smoother_server:
       minco_pre_w_obstacle: 2.0
       minco_fine_max_iterations: 60
       minco_fine_w_energy: 5.0
-      minco_fine_w_obstacle: 1.5
+      minco_fine_w_obstacle: 1.2
       minco_fine_w_reference: 8.0
       minco_wei_time: 20.0
       minco_use_trapezoidal_time: true
@@ -639,6 +642,7 @@ trajectory_manager:
     output_topic: trajectory_manager/trajectory_for_mpc
     odom_topic: odometry
     costmap_topic: local_costmap/costmap_raw
+    navigation_mode_topic: navigation_mode_manager/mode
     publish_rate_hz: 20.0
     active_timeout_sec: 6.0
     min_remaining_time_sec: 0.15
@@ -650,22 +654,22 @@ trajectory_manager:
     enable_forward_collision_check: true
     allow_unknown_costmap: true
     collision_cost_threshold: 253
-    collision_check_horizon_sec: 1.2
-    collision_check_step_sec: 0.1
-    collision_check_radius: 0.2
+    collision_check_horizon_sec: 0.6
+    collision_check_step_sec: 0.08
+    collision_check_radius: 0.12
     emergency_stop_remaining_time_sec: 0.1
     emergency_stop_duration_sec: 0.2
     switch_goal_change_distance: 0.5
-    switch_max_position_error: 0.8
-    switch_max_velocity_error: 2.5
-    switch_max_acceleration_error: 3.0
+    switch_max_position_error: 0.70
+    switch_max_velocity_error: 2.2
+    switch_max_acceleration_error: 4.5
     switch_min_direction_dot: -0.2
     switch_min_candidate_duration_sec: 0.2
-    switch_min_interval_sec: 1.0
+    switch_min_interval_sec: 0.5
     switch_immediate_deviation: 1.2
     switch_immediate_length_ratio: 0.25
     switch_allow_when_remaining_sec: 1.0
-    tracking_error_replan_frames: 3
+    tracking_error_replan_frames: 5
     require_odom: true
 
 behavior_server:
@@ -864,8 +868,8 @@ grid_map_node:
     use_sim_time: true
     map:
       resolution: 0.05
-      obstacles_inflation: 0.2
-      obstacles_inflation_xy: 0.2
+      obstacles_inflation: 0.08
+      obstacles_inflation_xy: 0.08
       obstacles_inflation_z: 0.0
       frame_id: map
       local_map_margin: 10
@@ -883,22 +887,22 @@ grid_map_node:
       prob_miss_log: -0.4
       clamp_min_log: -2.0
       clamp_max_log: 3.5
-      min_occupancy_log: 0.0
+      min_occupancy_log: 0.2
       min_ray_length: 0.1
       max_ray_length: 10.0
       pub_z_slice: 0.3
       occupancy_grid_project_all_z: true
-      occupancy_grid_min_z: 0.05
-      occupancy_grid_max_z: 1.20
+      occupancy_grid_min_z: 0.08
+      occupancy_grid_max_z: 1.10
       occupancy_grid_hold_enabled: true
-      occupancy_grid_hold_time: 0.6
+      occupancy_grid_hold_time: 0.35
       occupancy_grid_debug: false
       occupancy_grid_publish_period_ms: 100
       esdf_update_period_ms: 50
-      cloud_stale_timeout_sec: 0.5
+      cloud_stale_timeout_sec: 0.3
       cloud_topic: obstacle_cloud
       odom_topic: odometry
       transform_timeout_sec: 0.05
-      voxel_decay_time: 5.0
+      voxel_decay_time: 3.0
       enable_esdf: true
       enable_negative_esdf: true

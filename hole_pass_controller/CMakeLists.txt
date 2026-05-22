@@ -13,6 +13,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(sentry_nav_interfaces REQUIRED)
+find_package(std_msgs REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
   src/navigation_mode_manager_node.cpp
@@ -27,6 +28,7 @@ ament_target_dependencies(${PROJECT_NAME}
   rclcpp
   rclcpp_components
   sentry_nav_interfaces
+  std_msgs
 )
 
 rclcpp_components_register_node(${PROJECT_NAME}

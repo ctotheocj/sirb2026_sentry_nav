@@ -46,6 +46,7 @@ NavigationModeManagerNode::NavigationModeManagerNode(const rclcpp::NodeOptions &
       std::placeholders::_1, std::placeholders::_2));
   hole_cmd_pub_ =
     create_publisher<sentry_nav_interfaces::msg::HolePassCmd>(hole_pass_cmd_topic_, 10);
+  mode_pub_ = create_publisher<std_msgs::msg::String>("navigation_mode_manager/mode", 10);
   watchdog_timer_ = create_wall_timer(
     std::chrono::milliseconds(100),
     std::bind(&NavigationModeManagerNode::watchdogCallback, this));
@@ -234,6 +235,7 @@ void NavigationModeManagerNode::watchdogCallback()
 void NavigationModeManagerNode::holeCommandTimerCallback()
 {
   publishHoleCommand();
+  publishModeStatus();
 }
 
 void NavigationModeManagerNode::publishHoleCommand()
@@ -247,6 +249,17 @@ void NavigationModeManagerNode::publishHoleCommand()
     active_hole_cmd_ : sentry_nav_interfaces::msg::HolePassCmd::HOLE_RAISE;
   msg.v_yaw = hole_mode_active_ ? active_v_yaw_ : 0.0F;
   hole_cmd_pub_->publish(msg);
+}
+
+void NavigationModeManagerNode::publishModeStatus()
+{
+  if (!mode_pub_) {
+    return;
+  }
+
+  std_msgs::msg::String msg;
+  msg.data = hole_mode_active_ ? "hole_pass" : "normal";
+  mode_pub_->publish(msg);
 }
 
 bool NavigationModeManagerNode::callSemanticLayer(

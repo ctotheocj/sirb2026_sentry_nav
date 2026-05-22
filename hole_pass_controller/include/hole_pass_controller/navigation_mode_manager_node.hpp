@@ -9,6 +9,7 @@
 #include "sentry_nav_interfaces/srv/get_navigation_mode.hpp"
 #include "sentry_nav_interfaces/srv/set_navigation_mode.hpp"
 #include "sentry_nav_interfaces/srv/set_semantic_layer_mode.hpp"
+#include "std_msgs/msg/string.hpp"
 
 namespace hole_pass_controller
 {
@@ -32,6 +33,7 @@ private:
   void watchdogCallback();
   void holeCommandTimerCallback();
   void publishHoleCommand();
+  void publishModeStatus();
   bool enterHolePass(const SetNavigationMode::Request & request, std::string & message);
   bool restoreNormal(const std::string & owner_id, std::string & message);
   bool applyNormalModeServices();
@@ -43,6 +45,7 @@ private:
   rclcpp::Service<SetNavigationMode>::SharedPtr service_;
   rclcpp::Service<GetNavigationMode>::SharedPtr status_service_;
   rclcpp::Publisher<sentry_nav_interfaces::msg::HolePassCmd>::SharedPtr hole_cmd_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr mode_pub_;
   rclcpp::TimerBase::SharedPtr watchdog_timer_;
   rclcpp::TimerBase::SharedPtr hole_cmd_timer_;
   rclcpp::CallbackGroup::SharedPtr client_callback_group_;

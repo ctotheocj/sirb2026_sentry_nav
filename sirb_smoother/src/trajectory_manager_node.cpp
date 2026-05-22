@@ -50,6 +50,8 @@ TrajectoryManagerNode::TrajectoryManagerNode(const rclcpp::NodeOptions & options
     "output_topic", "trajectory_manager/trajectory_for_mpc");
   odom_topic_ = declare_parameter<std::string>("odom_topic", "odometry");
   costmap_topic_ = declare_parameter<std::string>("costmap_topic", "local_costmap/costmap_raw");
+  navigation_mode_topic_ = declare_parameter<std::string>(
+    "navigation_mode_topic", "navigation_mode_manager/mode");
   publish_rate_hz_ = declare_parameter<double>("publish_rate_hz", 20.0);
   active_timeout_sec_ = declare_parameter<double>("active_timeout_sec", 6.0);
   min_remaining_time_sec_ = declare_parameter<double>("min_remaining_time_sec", 0.15);
@@ -98,6 +100,11 @@ TrajectoryManagerNode::TrajectoryManagerNode(const rclcpp::NodeOptions & options
   costmap_sub_ = create_subscription<nav2_msgs::msg::Costmap>(
     costmap_topic_, rclcpp::QoS(1),
     std::bind(&TrajectoryManagerNode::costmapCallback, this, std::placeholders::_1));
+  navigation_mode_sub_ = create_subscription<std_msgs::msg::String>(
+    navigation_mode_topic_, rclcpp::QoS(10),
+    [this](const std_msgs::msg::String::SharedPtr msg) {
+      hole_pass_mode_active_.store(msg->data == "hole_pass");
+    });
   commit_action_server_ = rclcpp_action::create_server<CommitTrajectory>(
     this,
     "trajectory_manager/commit_trajectory",
@@ -1320,9 +1327,15 @@ bool TrajectoryManagerNode::trajectoryIsCollisionFree(
   double start_time,
   double horizon_sec,
   double & collision_time,
-  int & collision_cost) const
+  int & collision_cost)
 {
   if (!enable_forward_collision_check_ || !has_costmap_) {
+    return true;
+  }
+  if (holePassModeActive()) {
+    RCLCPP_INFO_THROTTLE(
+      get_logger(), *get_clock(), 1000,
+      "TrajectoryManager collision check skipped in hole_pass mode");
     return true;
   }
 
@@ -1398,6 +1411,11 @@ bool TrajectoryManagerNode::trajectoryIsCollisionFree(
   }
 
   return true;
+}
+
+bool TrajectoryManagerNode::holePassModeActive() const
+{
+  return hole_pass_mode_active_.load();
 }
 
 }  // namespace sirb_smoother

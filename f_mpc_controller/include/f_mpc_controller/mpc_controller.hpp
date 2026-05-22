@@ -12,6 +12,7 @@
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "std_msgs/msg/header.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "nav2_core/controller.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "nav_msgs/msg/path.hpp"
@@ -153,6 +154,7 @@ private:
     double r_x,
     double r_y,
     geometry_msgs::msg::TwistStamped &);
+  bool holePassModeActive() const;
   void applyGoalStopProtection(
     geometry_msgs::msg::TwistStamped & cmd,
     double r_x,
@@ -338,6 +340,11 @@ private:
 
   bool allow_obstacle_retry_without_constraints_{false};
   bool allow_speed_limit_retry_without_limits_{false};
+
+  std::string navigation_mode_topic_{"navigation_mode_manager/mode"};
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr navigation_mode_sub_;
+  mutable std::mutex navigation_mode_mutex_;
+  bool hole_pass_mode_active_{false};
 
   bool debug_logging_{false};
 
