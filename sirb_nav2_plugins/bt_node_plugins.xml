@@ -24,19 +24,9 @@
       等待定位诊断进入可信 TRACKING 状态后放行规划控制链。
     </description>
   </class>
-  <class type="sirb_nav2_plugins::IsHoleModeActiveCondition" base_class_type="BT::ConditionNode">
+  <class type="sirb_nav2_plugins::HolePassModeController" base_class_type="BT::ActionNodeBase">
     <description>
-      检查过洞模式是否正在激活，用于抑制普通重规划。
-    </description>
-  </class>
-  <class type="sirb_nav2_plugins::HoleApproachCondition" base_class_type="BT::ConditionNode">
-    <description>
-      基于当前已提交轨迹与洞口 polygon 相交关系判断是否进入过洞任务。
-    </description>
-  </class>
-  <class type="sirb_nav2_plugins::HolePassScope" base_class_type="BT::DecoratorNode">
-    <description>
-      在子树执行期间进入过洞导航模式，并在成功、失败或 halt 时恢复普通模式。
+      机器人进入洞的任一端口区域时切换过洞语义模式，到达另一端口区域后发送上升指令并恢复普通模式，不接管 FollowPath 控制。
     </description>
   </class>
   <class type="sirb_nav2_plugins::CommitTrajectoryAction" base_class_type="BT::ActionNodeBase">
@@ -47,11 +37,6 @@
   <class type="sirb_nav2_plugins::GenerateMincoCandidateAction" base_class_type="BT::ActionNodeBase">
     <description>
       由全局路径异步生成候选 smooth path 与候选 MINCO 轨迹。
-    </description>
-  </class>
-  <class type="sirb_nav2_plugins::PassHoleAction" base_class_type="BT::ActionNodeBase">
-    <description>
-      调用 hole_pass_controller 的 PassHole action 执行连续过洞控制。
     </description>
   </class>
 </library>

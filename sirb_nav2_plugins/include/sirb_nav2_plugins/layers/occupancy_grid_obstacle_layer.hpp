@@ -3,19 +3,14 @@
 
 #include <mutex>
 #include <string>
-#include <utility>
 #include <vector>
 
-#include "geometry_msgs/msg/polygon.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "nav2_costmap_2d/layer.hpp"
 #include "nav2_costmap_2d/layered_costmap.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sentry_nav_interfaces/srv/set_semantic_layer_mode.hpp"
-#include "std_srvs/srv/set_bool.hpp"
-#include "tf2_ros/buffer.h"
-#include "tf2_ros/transform_listener.h"
 
 namespace pb_nav2_costmap_2d
 {
@@ -45,9 +40,6 @@ private:
   };
 
   void incomingMap(const nav_msgs::msg::OccupancyGrid::SharedPtr msg);
-  void setEnabledService(
-    const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
-    std::shared_ptr<std_srvs::srv::SetBool::Response> response);
   void setSemanticLayerModeService(
     const std::shared_ptr<sentry_nav_interfaces::srv::SetSemanticLayerMode::Request> request,
     std::shared_ptr<sentry_nav_interfaces::srv::SetSemanticLayerMode::Response> response);
@@ -62,14 +54,6 @@ private:
   bool transformCellsToCostmapFrame(
     const std::string & source_frame, const std::vector<CellArea> & source_cells,
     std::vector<CellArea> & target_cells) const;
-  bool cellMaskedByCorridor(const CellArea & cell) const;
-  bool pointInCorridor(double x, double y) const;
-  bool pointInPolygon(
-    double x, double y, const std::vector<std::pair<double, double>> & polygon) const;
-  bool transformCorridorToCostmapFrame(
-    const std::string & frame_id,
-    const geometry_msgs::msg::Polygon & corridor,
-    std::vector<std::pair<double, double>> & transformed) const;
   void touchCells(
     const std::vector<CellArea> & cells, double * min_x, double * min_y, double * max_x,
     double * max_y) const;
@@ -83,14 +67,11 @@ private:
   bool stamp_source_cell_area_;
   bool debug_logging_;
   std::string topic_;
-  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr set_enabled_srv_;
   rclcpp::Service<sentry_nav_interfaces::srv::SetSemanticLayerMode>::SharedPtr
     set_semantic_mode_srv_;
   nav_msgs::msg::OccupancyGrid::SharedPtr map_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
   rclcpp::Clock::SharedPtr clock_;
-  std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   std::mutex map_mutex_;
   std::mutex cells_mutex_;
   mutable std::mutex mode_mutex_;
@@ -101,7 +82,6 @@ private:
   double last_map_time_sec_{-1.0};
   bool needs_clear_previous_{false};
   bool hole_pass_mode_{false};
-  std::vector<std::pair<double, double>> corridor_polygon_;
 };
 
 }  // namespace pb_nav2_costmap_2d

@@ -167,7 +167,8 @@ CORE_CHECKS = (
         expected_rate="20 Hz while active",
         required_publishers=("trajectory_manager",),
         required_subscribers=("controller_server",),
-        note="active trajectory owned by TrajectoryManager",
+        optional_subscribers=("bt_navigator",),
+        note="active trajectory owned by TrajectoryManager and tracked by MPC",
     ),
     TopicCheck(
         phase="control",
@@ -180,39 +181,20 @@ CORE_CHECKS = (
     ),
     TopicCheck(
         phase="control",
-        topic="cmd_vel_nav2_result",
+        topic="cmd_vel_selected",
         msg_type="geometry_msgs/msg/Twist",
         expected_rate="velocity_smoother rate, 30 Hz configured",
         required_publishers=("velocity_smoother",),
-        required_subscribers=("cmd_vel_mux",),
-        note="smoothed Nav2 output before velocity source selection",
-    ),
-    TopicCheck(
-        phase="control",
-        topic="cmd_vel_hole_controller",
-        msg_type="geometry_msgs/msg/Twist",
-        expected_rate="PassHole action dependent",
-        required_publishers=("hole_pass_controller",),
-        required_subscribers=("cmd_vel_mux",),
-        note="high-priority velocity stream used only during BT hole pass",
-    ),
-    TopicCheck(
-        phase="control",
-        topic="cmd_vel_selected",
-        msg_type="geometry_msgs/msg/Twist",
-        expected_rate="cmd_vel_mux publish rate",
-        required_publishers=("cmd_vel_mux",),
         required_subscribers=("fake_vel_transform",),
-        note="selected velocity stream after nav2/hole-pass mux",
+        note="smoothed Nav2 output consumed by fake_vel_transform",
     ),
     TopicCheck(
-        phase="control",
-        topic="cmd_vel_selected_stamped",
-        msg_type="geometry_msgs/msg/TwistStamped",
-        expected_rate="cmd_vel_mux publish rate",
-        required_publishers=("cmd_vel_mux",),
-        required_subscribers=("fake_vel_transform",),
-        note="timestamped selected velocity preferred by fake_vel_transform",
+        phase="hole_pass",
+        topic="mpc/hole_pass_cmd",
+        msg_type="sentry_nav_interfaces/msg/HolePassCmd",
+        expected_rate="navigation_mode_manager command period",
+        required_publishers=("navigation_mode_manager",),
+        note="lower/raise command plus yaw-rate command while hole-pass mode is active; raise otherwise",
     ),
     TopicCheck(
         phase="control",
@@ -249,11 +231,6 @@ ACTION_CHECKS = (
         "sentry_nav_interfaces/action/CommitTrajectory",
         note="BT trajectory commit server",
     ),
-    ActionCheck(
-        "pass_hole",
-        "sentry_nav_interfaces/action/PassHole",
-        note="BT hole pass continuous controller action server",
-    ),
 )
 
 SERVICE_CHECKS = (
@@ -265,17 +242,7 @@ SERVICE_CHECKS = (
     ServiceCheck(
         "global_costmap/occupancy_grid_layer/set_semantic_layer_mode",
         "sentry_nav_interfaces/srv/SetSemanticLayerMode",
-        note="global occupancy_grid corridor mask service",
-    ),
-    ServiceCheck(
-        "local_costmap/occupancy_grid_layer/set_semantic_layer_mode",
-        "sentry_nav_interfaces/srv/SetSemanticLayerMode",
-        note="local occupancy_grid corridor mask service",
-    ),
-    ServiceCheck(
-        "trajectory_manager/set_hole_collision_policy",
-        "std_srvs/srv/SetBool",
-        note="trajectory manager hole-pass collision policy switch",
+        note="global occupancy_grid obstacle-layer suppression service",
     ),
 )
 

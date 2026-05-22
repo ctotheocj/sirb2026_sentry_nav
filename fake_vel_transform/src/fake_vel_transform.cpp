@@ -71,9 +71,6 @@ FakeVelTransform::FakeVelTransform(const rclcpp::NodeOptions & options)
   this->get_parameter("use_nav_yaw", use_nav_yaw_);
   this->get_parameter("nav_yaw_topic", nav_yaw_topic_);
 
-  if (input_cmd_vel_stamped_topic_.empty() && !input_cmd_vel_topic_.empty()) {
-    input_cmd_vel_stamped_topic_ = input_cmd_vel_topic_ + "_stamped";
-  }
   stamped_cmd_timeout_sec_ = std::min(stamped_cmd_timeout_sec_, max_latest_cmd_age_sec);
   tf_lookup_timeout_sec_ = std::max(0.0, tf_lookup_timeout_sec_);
   stamped_cmd_timeout_sec_ = std::max(0.0, stamped_cmd_timeout_sec_);

@@ -4,7 +4,7 @@
 
 主要目的是用于适配 NAV2 局部路径规划器，当速度参考坐标系 `robot_base_frame` 变化剧烈时，如云台处于自旋扫描时，NAV2 局部路径规划器会将机器人的方向视为与当前路径规划方向一致，导致机器人无法正常运动。而使用 `fake_robot_base_frame` 可以规避这个问题，实现较稳定的轨迹跟踪效果。
 
-由于 NAV2 Humble 发行版仍主要使用 Twist 类型（不含时间戳），直接按速度时间戳对齐 odometry/TF 会丢失信息。本功能包优先订阅 `input_cmd_vel_stamped_topic`，按速度命令时间戳查询 `odom_frame` 到 `robot_base_frame` 的 TF 并完成速度转换。若 stamped 速度暂时不可用，则使用 legacy `input_cmd_vel_topic` 并采用当前缓存 yaw 转换；该路径只作为未收到 stamped 指令时的直接输入路径，不再依赖 `local_plan` 间接同步。
+由于 NAV2 Humble 发行版仍主要使用 Twist 类型（不含时间戳），当前 bringup 使用 `input_cmd_vel_topic` 直接接收 `velocity_smoother` 输出并采用当前缓存 yaw 转换。若部署显式配置了 `input_cmd_vel_stamped_topic`，本节点会优先按速度命令时间戳查询 `odom_frame` 到 `robot_base_frame` 的 TF 并完成速度转换。
 Related issue: [Switch from Twist to TwistStamped for cmd_vel #1594](https://github.com/ros-navigation/navigation2/issues/1594)
 
 ## Published Topics
@@ -15,7 +15,7 @@ Related issue: [Switch from Twist to TwistStamped for cmd_vel #1594](https://git
 ## Subscribed Topics
 
 * `input_cmd_vel_topic` (`geometry_msgs/msg/Twist`) - 机器人的 legacy 速度指令
-* `input_cmd_vel_stamped_topic` (`geometry_msgs/msg/TwistStamped`) - 机器人的带时间戳速度指令，优先使用
+* `input_cmd_vel_stamped_topic` (`geometry_msgs/msg/TwistStamped`) - 显式配置后订阅的带时间戳速度指令，优先使用
 * `odom_topic` (`nav_msgs/msg/Odometry`) - 里程计数据
 * `cmd_spin_topic` (`example_interfaces/msg/Float32`) - 控制底盘固定旋转速度，将会叠加到 `output_cmd_vel_topic` 中
 * `nav_yaw_topic` (`std_msgs/msg/Float64`) - `use_nav_yaw=true` 时订阅，默认 `/Nav_yaw`
@@ -27,7 +27,7 @@ Related issue: [Switch from Twist to TwistStamped for cmd_vel #1594](https://git
 * `fake_robot_base_frame` (`string`, default: "gimbal_link_fake") - 伪速度参考坐标系
 * `cmd_spin_topic` (`string`, default: "cmd_spin") - 控制底盘固定旋转速度的话题
 * `input_cmd_vel_topic` (`string`, default: "") - 输入速度指令的话题
-* `input_cmd_vel_stamped_topic` (`string`, default: "") - 输入带时间戳速度指令的话题，留空时默认为 `input_cmd_vel_topic + "_stamped"`
+* `input_cmd_vel_stamped_topic` (`string`, default: "") - 输入带时间戳速度指令的话题，留空时不订阅 stamped 输入
 * `output_cmd_vel_topic` (`string`, default: "") - 输出速度指令的话题。将原本基于 `fake_robot_base_frame` 的速度变换到 `robot_base_frame` 后发布
 * `odom_frame` (`string`, default: "odom") - TF 查询目标坐标系
 * `prefer_stamped_cmd_vel` (`bool`, default: true) - stamped 速度新鲜时抑制 legacy Twist 输出
@@ -45,8 +45,7 @@ Related issue: [Switch from Twist to TwistStamped for cmd_vel #1594](https://git
 
 ```text
 controller_server -> cmd_vel_controller
-velocity_smoother -> cmd_vel_nav2_result
-cmd_vel_mux       -> cmd_vel_selected / cmd_vel_selected_stamped
+velocity_smoother -> cmd_vel_selected
 fake_vel_transform -> cmd_vel
 ```
 

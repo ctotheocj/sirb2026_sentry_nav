@@ -1,8 +1,9 @@
 string mode
 string owner_id
 string hole_id
-string frame_id
-geometry_msgs/Polygon corridor
+uint8 hole_cmd
+# Chassis yaw-rate command in rad/s while hole-pass mode is active.
+float32 v_yaw
 float32 watchdog_timeout_sec
 ---
 bool success

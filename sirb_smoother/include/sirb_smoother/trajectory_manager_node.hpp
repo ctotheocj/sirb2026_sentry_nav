@@ -11,7 +11,6 @@
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "sentry_nav_interfaces/action/commit_trajectory.hpp"
 #include "sentry_nav_interfaces/msg/minco_trajectory.hpp"
-#include "std_srvs/srv/set_bool.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
@@ -49,9 +48,6 @@ private:
   void executeCommit(const std::shared_ptr<GoalHandleCommitTrajectory> goal_handle);
   void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
   void costmapCallback(const nav2_msgs::msg::Costmap::SharedPtr msg);
-  void setHoleCollisionPolicyService(
-    const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
-    std::shared_ptr<std_srvs::srv::SetBool::Response> response);
   void publishTimerCallback();
   void publishStatus(const rclcpp::Time & stamp, const char * reason);
   void publishEmergencyStop(const rclcpp::Time & stamp, const char * reason);
@@ -122,7 +118,6 @@ private:
   rclcpp::Publisher<sentry_nav_interfaces::msg::MincoTrajectory>::SharedPtr traj_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
   rclcpp_action::Server<CommitTrajectory>::SharedPtr commit_action_server_;
-  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr hole_collision_policy_srv_;
   rclcpp::TimerBase::SharedPtr publish_timer_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -171,7 +166,6 @@ private:
   double emergency_stop_remaining_time_sec_{0.10};
   double emergency_stop_duration_sec_{0.20};
   bool enable_forward_collision_check_{true};
-  bool hole_collision_policy_{false};
   bool allow_unknown_costmap_{true};
   int collision_cost_threshold_{253};
   double collision_check_horizon_sec_{1.2};

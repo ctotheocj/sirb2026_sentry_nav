@@ -20,7 +20,7 @@ publishes odometry yaw without the prediction term.
 | --- | --- | --- | --- |
 | `odometry` | `nav_msgs/msg/Odometry` | subscribe | Base yaw and stamp |
 | `/serial/v_yaw` | `std_msgs/msg/Float64` | subscribe | Default yaw-rate source |
-| `/Nav_yaw` | `std_msgs/msg/Float64` | publish | Absolute global topic consumed by `fake_vel_transform` and hole passing |
+| `/Nav_yaw` | `std_msgs/msg/Float64` | publish | Absolute global topic consumed by `fake_vel_transform` |
 | `yaw_fusion/debug` | `std_msgs/msg/Float64` | publish | Same yaw value, namespaced |
 | `yaw_fusion/status` | `std_msgs/msg/String` | publish | `v_yaw_valid` or `v_yaw_invalid_or_stale` |
 | `yaw_fusion/odom_latency` | `std_msgs/msg/Float64` | publish | Prediction dt in ms |

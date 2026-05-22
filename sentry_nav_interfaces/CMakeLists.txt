@@ -19,12 +19,10 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/TimestampedPath.msg"
   "msg/MincoTrajectory.msg"
   "msg/HolePassCmd.msg"
-  "msg/HolePassState.msg"
   "srv/SetNavigationMode.srv"
   "srv/SetSemanticLayerMode.srv"
   "action/GenerateMincoCandidate.action"
   "action/CommitTrajectory.action"
-  "action/PassHole.action"
   DEPENDENCIES std_msgs builtin_interfaces nav_msgs geometry_msgs action_msgs
 )
 

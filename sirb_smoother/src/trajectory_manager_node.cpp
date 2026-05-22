@@ -110,11 +110,6 @@ TrajectoryManagerNode::TrajectoryManagerNode(const rclcpp::NodeOptions & options
       std::bind(
       &TrajectoryManagerNode::handleCommitAccepted, this,
       std::placeholders::_1));
-  hole_collision_policy_srv_ = create_service<std_srvs::srv::SetBool>(
-    "trajectory_manager/set_hole_collision_policy",
-    std::bind(
-      &TrajectoryManagerNode::setHoleCollisionPolicyService, this,
-      std::placeholders::_1, std::placeholders::_2));
 
   if (!publish_full_active_trajectory_) {
     RCLCPP_WARN(
@@ -305,18 +300,6 @@ void TrajectoryManagerNode::costmapCallback(const nav2_msgs::msg::Costmap::Share
   std::lock_guard<std::mutex> lk(mutex_);
   latest_costmap_ = *msg;
   has_costmap_ = true;
-}
-
-void TrajectoryManagerNode::setHoleCollisionPolicyService(
-  const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
-  std::shared_ptr<std_srvs::srv::SetBool::Response> response)
-{
-  hole_collision_policy_ = request->data;
-  response->success = true;
-  response->message = hole_collision_policy_ ?
-    "trajectory manager hole collision policy enabled" :
-    "trajectory manager normal collision policy restored";
-  RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
 }
 
 void TrajectoryManagerNode::publishTimerCallback()
@@ -1339,7 +1322,7 @@ bool TrajectoryManagerNode::trajectoryIsCollisionFree(
   double & collision_time,
   int & collision_cost) const
 {
-  if (!enable_forward_collision_check_ || hole_collision_policy_ || !has_costmap_) {
+  if (!enable_forward_collision_check_ || !has_costmap_) {
     return true;
   }
 

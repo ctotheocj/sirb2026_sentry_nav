@@ -1,15 +1,13 @@
 #ifndef HOLE_PASS_CONTROLLER__NAVIGATION_MODE_MANAGER_NODE_HPP_
 #define HOLE_PASS_CONTROLLER__NAVIGATION_MODE_MANAGER_NODE_HPP_
 
-#include <map>
 #include <string>
 #include <vector>
 
 #include "rclcpp/rclcpp.hpp"
+#include "sentry_nav_interfaces/msg/hole_pass_cmd.hpp"
 #include "sentry_nav_interfaces/srv/set_navigation_mode.hpp"
 #include "sentry_nav_interfaces/srv/set_semantic_layer_mode.hpp"
-#include "std_msgs/msg/bool.hpp"
-#include "std_srvs/srv/set_bool.hpp"
 
 namespace hole_pass_controller
 {
@@ -27,42 +25,32 @@ private:
     const std::shared_ptr<SetNavigationMode::Request> request,
     std::shared_ptr<SetNavigationMode::Response> response);
   void watchdogCallback();
+  void holeCommandTimerCallback();
+  void publishHoleCommand();
   bool enterHolePass(const SetNavigationMode::Request & request, std::string & message);
   bool restoreNormal(const std::string & owner_id, std::string & message);
   bool applyNormalModeServices();
   bool callSemanticLayer(
     const std::string & service,
-    const std::string & mode,
-    const std::string & frame_id,
-    const geometry_msgs::msg::Polygon & corridor);
-  bool callSetBool(const std::string & service, bool value);
-  bool setInflationRadius(const std::string & node_name, double radius);
+    const std::string & mode);
   std::vector<std::string> parseList(const std::string & text) const;
-  void setHoleModeBlackboardHint(bool active);
 
   rclcpp::Service<SetNavigationMode>::SharedPtr service_;
-  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr hole_mode_pub_;
+  rclcpp::Publisher<sentry_nav_interfaces::msg::HolePassCmd>::SharedPtr hole_cmd_pub_;
   rclcpp::TimerBase::SharedPtr watchdog_timer_;
+  rclcpp::TimerBase::SharedPtr hole_cmd_timer_;
   rclcpp::CallbackGroup::SharedPtr client_callback_group_;
   rclcpp::executors::SingleThreadedExecutor client_executor_;
 
   std::vector<std::string> semantic_layer_services_;
-  std::vector<std::string> legacy_layer_services_;
-  std::string replan_suppression_service_;
-  std::string trajectory_policy_service_;
-  std::string global_costmap_node_;
-  std::string local_costmap_node_;
-  double normal_global_inflation_radius_{0.55};
-  double normal_local_inflation_radius_{0.8};
-  double hole_global_inflation_radius_{0.10};
-  double hole_local_inflation_radius_{0.10};
   double service_timeout_sec_{0.2};
   double default_watchdog_timeout_sec_{8.0};
-  bool use_inflation_radius_switch_{true};
-  bool use_semantic_layer_mode_{true};
-  bool use_trajectory_policy_switch_{true};
+  double hole_command_publish_period_sec_{0.05};
+  std::string hole_pass_cmd_topic_;
 
   bool hole_mode_active_{false};
+  uint8_t active_hole_cmd_{sentry_nav_interfaces::msg::HolePassCmd::HOLE_RAISE};
+  float active_v_yaw_{0.0F};
   std::string active_owner_id_;
   std::string active_hole_id_;
   rclcpp::Time active_deadline_{0, 0, RCL_ROS_TIME};

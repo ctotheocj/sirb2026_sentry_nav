@@ -157,26 +157,6 @@ def generate_launch_description():
             ),
             Node(
                 package="hole_pass_controller",
-                executable="hole_pass_controller_node",
-                name="hole_pass_controller",
-                output="screen",
-                respawn=use_respawn,
-                respawn_delay=2.0,
-                parameters=[configured_params],
-                arguments=["--ros-args", "--log-level", log_level],
-            ),
-            Node(
-                package="hole_pass_controller",
-                executable="cmd_vel_mux_node",
-                name="cmd_vel_mux",
-                output="screen",
-                respawn=use_respawn,
-                respawn_delay=2.0,
-                parameters=[configured_params],
-                arguments=["--ros-args", "--log-level", log_level],
-            ),
-            Node(
-                package="hole_pass_controller",
                 executable="navigation_mode_manager_node",
                 name="navigation_mode_manager",
                 output="screen",
@@ -248,9 +228,6 @@ def generate_launch_description():
                 respawn_delay=2.0,
                 parameters=[configured_params],
                 arguments=["--ros-args", "--log-level", log_level],
-                remappings=[
-                    ("cmd_vel", "cmd_vel_nav2_result"),  # remap output
-                ],
             ),
             Node(
                 package="nav2_waypoint_follower",
@@ -273,7 +250,7 @@ def generate_launch_description():
                 arguments=["--ros-args", "--log-level", log_level],
                 remappings=[
                     ("cmd_vel", "cmd_vel_controller"),  # remap input
-                    ("cmd_vel_smoothed", "cmd_vel_nav2_result"),  # remap output
+                    ("cmd_vel_smoothed", "cmd_vel_selected"),  # remap output
                 ],
             ),
             Node(
@@ -310,18 +287,6 @@ def generate_launch_description():
                 # fake_vel_transform publishes gimbal_yaw → gimbal_yaw_fake TF;
                 # without this remapping it goes to global /tf instead of the namespace tf topic.
                 remappings=[("/tf", "tf"), ("/tf_static", "tf_static")],
-            ),
-            ComposableNode(
-                package="hole_pass_controller",
-                plugin="hole_pass_controller::HolePassController",
-                name="hole_pass_controller",
-                parameters=[configured_params],
-            ),
-            ComposableNode(
-                package="hole_pass_controller",
-                plugin="hole_pass_controller::CmdVelMuxNode",
-                name="cmd_vel_mux",
-                parameters=[configured_params],
             ),
             ComposableNode(
                 package="hole_pass_controller",
@@ -382,7 +347,7 @@ def generate_launch_description():
                 parameters=[configured_params],
                 remappings=[
                     ("cmd_vel", "cmd_vel_controller"),  # remap input
-                    ("cmd_vel_smoothed", "cmd_vel_nav2_result"),  # remap output
+                    ("cmd_vel_smoothed", "cmd_vel_selected"),  # remap output
                 ],
             ),
             ComposableNode(

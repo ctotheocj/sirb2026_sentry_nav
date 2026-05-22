@@ -27,12 +27,9 @@ ament_auto_add_library(sirb_nav2_plugins_nodes SHARED
   src/bt_nodes/corridor_replan_condition.cpp
   src/bt_nodes/path_gate.cpp
   src/bt_nodes/localization_ready_condition.cpp
-  src/bt_nodes/is_hole_mode_active_condition.cpp
-  src/bt_nodes/hole_approach_condition.cpp
-  src/bt_nodes/hole_pass_scope.cpp
+  src/bt_nodes/hole_pass_mode_controller.cpp
   src/bt_nodes/commit_trajectory_action.cpp
   src/bt_nodes/generate_minco_candidate_action.cpp
-  src/bt_nodes/pass_hole_action.cpp
   src/bt_nodes/register_nodes.cpp
 )
 

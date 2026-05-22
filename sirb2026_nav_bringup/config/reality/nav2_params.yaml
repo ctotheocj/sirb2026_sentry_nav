@@ -130,10 +130,10 @@ fake_vel_transform:
     robot_base_frame: "gimbal_yaw"
     fake_robot_base_frame: "gimbal_yaw_fake"
     input_cmd_vel_topic: "cmd_vel_selected"
-    input_cmd_vel_stamped_topic: "cmd_vel_selected_stamped"
+    input_cmd_vel_stamped_topic: ""
     output_cmd_vel_topic: "cmd_vel"
     odom_frame: "odom"
-    prefer_stamped_cmd_vel: true
+    prefer_stamped_cmd_vel: false
     allow_latest_tf_fallback: true
     tf_lookup_timeout_sec: 0.01
     stamped_cmd_timeout_sec: 0.12
@@ -143,81 +143,14 @@ fake_vel_transform:
     use_nav_yaw: false
     nav_yaw_topic: "/Nav_yaw"
 
-hole_pass_controller:
-  ros__parameters:
-    use_sim_time: False
-    global_frame: "map"
-    robot_frame: "gimbal_yaw_fake"
-    output_cmd_vel_topic: "cmd_vel_hole_controller"
-    output_cmd_vel_stamped_topic: "cmd_vel_hole_controller_stamped"
-    cmd_frame_id: "gimbal_yaw_fake"
-    trajectory_topic: "trajectory_manager/trajectory_for_mpc"
-    hole_pass_cmd_topic: "mpc/hole_pass_cmd"
-    hole_pass_state_topic: "serial/hole_pass_state"
-    nav_yaw_topic: "/Nav_yaw"
-    yaw_target_marker_topic: "hole_pass/yaw_target_marker"
-    pass_hole_action_name: "pass_hole"
-    # Geometry is owned by bt_navigator.hole_pass to avoid duplicated hole definitions.
-    # Do not set an empty hole_ids list here: ROS 2 composable parameter loading
-    # cannot infer the type of an empty array.
-    prepare_distance: 1.5
-    stop_distance: 0.4
-    slow_speed: 0.25
-    pass_speed: 1.45
-    yaw_offset_deg: 0.0
-    yaw_kp: 2.5
-    max_v_yaw: 1.8
-    exit_raise_distance: 0.2
-    exit_timeout_sec: 3.0
-    lowering_timeout_sec: 2.0
-    height_state_timeout_sec: 0.3
-    nav_yaw_timeout_sec: 0.2
-    trajectory_timeout_sec: 0.5
-    tf_lookup_timeout_sec: 0.05
-    min_pass_time_sec: 0.4
-    min_pass_distance: 0.3
-    command_publish_period_sec: 0.02
-    command_hold_timeout_sec: 0.3
-    allow_reverse_tangent: false
-    stop_angular_while_waiting: true
-    yaw_marker_length: 0.7
-    yaw_marker_z: 0.25
-
-cmd_vel_mux:
-  ros__parameters:
-    use_sim_time: False
-    debug_logging: false
-    nav_topic: "cmd_vel_nav2_result"
-    hole_topic: "cmd_vel_hole_controller"
-    output_topic: "cmd_vel_selected"
-    output_stamped_topic: "cmd_vel_selected_stamped"
-    output_frame_id: "gimbal_yaw_fake"
-    nav_timeout: 0.5
-    hole_timeout: 0.3
-    nav_priority: 10
-    hole_priority: 20
-    publish_period: 0.02
-    publish_zero_when_idle: false
-    require_hole_mode: true
-    hole_mode_topic: "navigation_mode_manager/hole_mode_active"
-
 navigation_mode_manager:
   ros__parameters:
     use_sim_time: False
-    semantic_layer_services: "global_costmap/occupancy_grid_layer/set_semantic_layer_mode;local_costmap/occupancy_grid_layer/set_semantic_layer_mode"
-    legacy_layer_services: "global_costmap/occupancy_grid_layer/set_enabled;local_costmap/occupancy_grid_layer/set_enabled"
-    trajectory_policy_service: "trajectory_manager/set_hole_collision_policy"
-    global_costmap_node: "global_costmap/global_costmap"
-    local_costmap_node: "local_costmap/local_costmap"
-    normal_global_inflation_radius: 0.55
-    normal_local_inflation_radius: 0.8
-    hole_global_inflation_radius: 0.10
-    hole_local_inflation_radius: 0.10
+    semantic_layer_services: "global_costmap/occupancy_grid_layer/set_semantic_layer_mode"
+    hole_pass_cmd_topic: "mpc/hole_pass_cmd"
+    hole_command_publish_period_sec: 0.05
     service_timeout_sec: 0.5
     watchdog_timeout_sec: 8.0
-    use_inflation_radius_switch: true
-    use_semantic_layer_mode: true
-    use_trajectory_policy_switch: true
 
 ndt_omp_relocalization:
   ros__parameters:
@@ -357,10 +290,10 @@ bt_navigator:
     wait_for_service_timeout: 1000
     use_dynamic_obstacles: false
     hole_pass:
-      prepare_distance: 1.5
-      exit_goal_offset: 0.4
-      alignment_tolerance_deg: 25.0
-      trajectory_max_age: 0.3
+      yaw_offset_deg: 0.0
+      yaw_kp: 2.5
+      max_v_yaw: 1.8
+      raise_duration_sec: 1.0
       hole_ids: ["hole_1", "hole_2"]
       holes:
         hole_1:
@@ -691,7 +624,7 @@ trajectory_manager:
     input_topic: "safe_geometric_smoother/legacy_trajectory_for_mpc"
     output_topic: "trajectory_manager/trajectory_for_mpc"
     odom_topic: "odometry"
-    costmap_topic: "global_costmap/costmap_raw"
+    costmap_topic: "local_costmap/costmap_raw"
     publish_rate_hz: 20.0
     active_timeout_sec: 6.0
     min_remaining_time_sec: 0.15
