@@ -23,3 +23,9 @@ geometry_msgs/Vector3 initial_velocity
 
 # Initial acceleration at first waypoint
 geometry_msgs/Vector3 initial_acceleration
+
+# Terminal boundary used to rebuild rolling local trajectories.
+# terminal_stop=true means this trajectory ends at a real stop goal.
+bool terminal_stop
+geometry_msgs/Vector3 terminal_velocity
+geometry_msgs/Vector3 terminal_acceleration

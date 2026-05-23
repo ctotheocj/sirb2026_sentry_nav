@@ -20,7 +20,7 @@ from launch.actions import DeclareLaunchArgument, GroupAction, SetEnvironmentVar
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import LoadComposableNodes, Node
-from launch_ros.descriptions import ComposableNode, ParameterFile
+from launch_ros.descriptions import ComposableNode, ParameterFile, ParameterValue
 from nav2_common.launch import RewrittenYaml
 
 
@@ -32,6 +32,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
     autostart = LaunchConfiguration("autostart")
     prior_pcd_file = LaunchConfiguration("prior_pcd_file")
+    localization_backend = LaunchConfiguration("localization_backend")
     params_file = LaunchConfiguration("params_file")
     use_composition = LaunchConfiguration("use_composition")
     container_name = LaunchConfiguration("container_name")
@@ -74,6 +75,16 @@ def generate_launch_description():
         default_value="",
         description="Full path to prior PCD file to load",
     )
+    declare_localization_backend_cmd = DeclareLaunchArgument(
+        "localization_backend",
+        default_value="point_lio_prior",
+        description=(
+            "Localization backend. 'point_lio_prior' uses Point-LIO scan-to-prior-map "
+            "localization and publishes map->odom from the accepted initial pose; "
+            "'ndt' keeps the legacy NDT map->odom correction."
+        ),
+        choices=["point_lio_prior", "ndt"],
+    )
     declare_params_file_cmd = DeclareLaunchArgument(
         "params_file",
         default_value=os.path.join(bringup_dir, "config", "reality", "nav2_params.yaml"),
@@ -113,6 +124,18 @@ def generate_launch_description():
         parameters=[
             configured_params,
             {"prior_pcd.prior_pcd_map_path": prior_pcd_file},
+            {
+                "prior_pcd.enable": ParameterValue(
+                    PythonExpression(["'", localization_backend, "' == 'point_lio_prior'"]),
+                    value_type=bool,
+                )
+            },
+            {
+                "prior_pcd.localization_mode": ParameterValue(
+                    PythonExpression(["'", localization_backend, "' == 'point_lio_prior'"]),
+                    value_type=bool,
+                )
+            },
         ],
         arguments=["--ros-args", "--log-level", log_level],
     )
@@ -134,6 +157,7 @@ def generate_launch_description():
                 package="ndt_omp_relocalization",
                 executable="ndt_omp_relocalization_node",
                 name="ndt_omp_relocalization",
+                condition=IfCondition(PythonExpression(["'", localization_backend, "' == 'ndt'"])),
                 output="screen",
                 respawn=use_respawn,
                 respawn_delay=2.0,
@@ -170,6 +194,7 @@ def generate_launch_description():
                 package="ndt_omp_relocalization",
                 plugin="ndt_omp_relocalization::NdtOmpRelocalizationNode",
                 name="ndt_omp_relocalization",
+                condition=IfCondition(PythonExpression(["'", localization_backend, "' == 'ndt'"])),
                 parameters=[configured_params, {"prior_pcd_file": prior_pcd_file}],
                 remappings=[("/tf", "tf"), ("/tf_static", "tf_static")],
             ),
@@ -197,6 +222,7 @@ def generate_launch_description():
     ld.add_action(declare_map_yaml_cmd)
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_prior_pcd_file_cmd)
+    ld.add_action(declare_localization_backend_cmd)
     ld.add_action(declare_params_file_cmd)
     ld.add_action(declare_autostart_cmd)
     ld.add_action(declare_use_composition_cmd)

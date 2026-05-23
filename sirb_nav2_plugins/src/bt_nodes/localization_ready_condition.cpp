@@ -40,7 +40,7 @@ LocalizationReadyCondition::LocalizationReadyCondition(
 
 BT::PortsList LocalizationReadyCondition::providedPorts()
 {
-  const std::string default_topics = "ndt_omp_relocalization/diagnostics";
+  const std::string default_topics = "point_lio/diagnostics,ndt_omp_relocalization/diagnostics";
   return {
     BT::InputPort<std::string>(
       "diagnostics_topics", default_topics,
@@ -60,7 +60,7 @@ BT::PortsList LocalizationReadyCondition::providedPorts()
 
 std::vector<std::string> LocalizationReadyCondition::getDiagnosticsTopics()
 {
-  const std::string default_topics = "ndt_omp_relocalization/diagnostics";
+  const std::string default_topics = "point_lio/diagnostics,ndt_omp_relocalization/diagnostics";
   std::string topics_text = default_topics;
   getInput("diagnostics_topics", topics_text);
   std::string legacy_topic;
@@ -82,6 +82,7 @@ std::vector<std::string> LocalizationReadyCondition::getDiagnosticsTopics()
     }
   }
   if (topics.empty()) {
+    topics.push_back("point_lio/diagnostics");
     topics.push_back("ndt_omp_relocalization/diagnostics");
   }
   return topics;
@@ -123,24 +124,11 @@ void LocalizationReadyCondition::ensureSubscriptions(
   }
 }
 
-void LocalizationReadyCondition::diagnosticsCallback(
-  const diagnostic_msgs::msg::DiagnosticArray::SharedPtr msg)
-{
-  diagnosticsCallbackForTopic("diagnostics", msg);
-}
-
 void LocalizationReadyCondition::diagnosticsCallbackForTopic(
   const std::string & topic,
   const diagnostic_msgs::msg::DiagnosticArray::SharedPtr msg)
 {
   for (const auto & status : msg->status) {
-    if (status.name.find("relocalization") == std::string::npos &&
-      status.name.find("gicp") == std::string::npos &&
-      status.name.find("ndt") == std::string::npos)
-    {
-      continue;
-    }
-
     std::string state = "UNKNOWN";
     bool trusted = false;
     bool has_state = false;
@@ -197,7 +185,7 @@ BT::NodeStatus LocalizationReadyCondition::checkReady()
 {
   double max_age = 0.8;
   int required_ready_ticks = 2;
-  std::string required_state = "TRACKING";
+  std::string required_state = "trusted";
   bool require_trusted = true;
   bool allow_missing_diagnostics = false;
 

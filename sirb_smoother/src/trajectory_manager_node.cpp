@@ -39,13 +39,28 @@ private:
   std::atomic_bool & flag_;
 };
 
+bool isDegradedTrajectoryProduct(const std::string & product_type, bool degraded_flag)
+{
+  return degraded_flag ||
+    product_type == "timeout_reference_fallback" ||
+    product_type == "collision_fallback" ||
+    product_type == "geometry_fallback" ||
+    product_type == "path_fallback" ||
+    product_type == "cached_minco";
+}
+
+bool isOdomRebaseEligibleProduct(const std::string & product_type, bool degraded_flag)
+{
+  return product_type == "time_reference" ||
+    product_type == "optimized_minco" ||
+    isDegradedTrajectoryProduct(product_type, degraded_flag);
+}
+
 }  // namespace
 
 TrajectoryManagerNode::TrajectoryManagerNode(const rclcpp::NodeOptions & options)
 : Node("trajectory_manager", options)
 {
-  input_topic_ = declare_parameter<std::string>(
-    "input_topic", "safe_geometric_smoother/trajectory_for_mpc");
   output_topic_ = declare_parameter<std::string>(
     "output_topic", "trajectory_manager/trajectory_for_mpc");
   odom_topic_ = declare_parameter<std::string>("odom_topic", "odometry");
@@ -73,6 +88,7 @@ TrajectoryManagerNode::TrajectoryManagerNode(const rclcpp::NodeOptions & options
   emergency_stop_remaining_time_sec_ = declare_parameter<double>(
     "emergency_stop_remaining_time_sec", 0.10);
   emergency_stop_duration_sec_ = declare_parameter<double>("emergency_stop_duration_sec", 0.20);
+  terminal_arrival_distance_ = declare_parameter<double>("terminal_arrival_distance", 0.35);
   enable_forward_collision_check_ = declare_parameter<bool>("enable_forward_collision_check", true);
   allow_unknown_costmap_ = declare_parameter<bool>("allow_unknown_costmap", true);
   collision_cost_threshold_ = declare_parameter<int>("collision_cost_threshold", 253);
@@ -84,6 +100,7 @@ TrajectoryManagerNode::TrajectoryManagerNode(const rclcpp::NodeOptions & options
   require_odom_ = declare_parameter<bool>("require_odom", true);
   tracking_error_replan_frames_ = declare_parameter<int>("tracking_error_replan_frames", 3);
   tracking_error_replan_frames_ = std::max(1, tracking_error_replan_frames_);
+  terminal_arrival_distance_ = std::max(0.05, terminal_arrival_distance_);
 
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_, this, false);
@@ -92,11 +109,6 @@ TrajectoryManagerNode::TrajectoryManagerNode(const rclcpp::NodeOptions & options
     output_topic_, rclcpp::QoS(1));
   status_pub_ = create_publisher<sentry_nav_interfaces::msg::TrajectoryStatus>(
     "trajectory_manager/status", rclcpp::QoS(1));
-  status_text_pub_ = create_publisher<std_msgs::msg::String>(
-    "trajectory_manager/status_text", rclcpp::QoS(1));
-  traj_sub_ = create_subscription<sentry_nav_interfaces::msg::MincoTrajectory>(
-    input_topic_, rclcpp::QoS(1),
-    std::bind(&TrajectoryManagerNode::trajectoryCallback, this, std::placeholders::_1));
   odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
     odom_topic_, rclcpp::QoS(1),
     std::bind(&TrajectoryManagerNode::odomCallback, this, std::placeholders::_1));
@@ -154,18 +166,8 @@ TrajectoryManagerNode::TrajectoryManagerNode(const rclcpp::NodeOptions & options
 
   RCLCPP_INFO(
     get_logger(),
-    "TrajectoryManager configured input='%s' output='%s' odom='%s' costmap='%s' rate=%.1fHz",
-    input_topic_.c_str(), output_topic_.c_str(), odom_topic_.c_str(),
-    costmap_topic_.c_str(), rate);
-}
-
-void TrajectoryManagerNode::trajectoryCallback(
-  const sentry_nav_interfaces::msg::MincoTrajectory::SharedPtr msg)
-{
-  RCLCPP_INFO_THROTTLE(
-    get_logger(), *get_clock(), 1000,
-    "TrajectoryManager ignored legacy candidate topic: goal=%lu waypoints=%zu times=%zu",
-    static_cast<unsigned long>(msg->goal_id), msg->waypoints.size(), msg->segment_times.size());
+    "TrajectoryManager configured output='%s' odom='%s' costmap='%s' rate=%.1fHz",
+    output_topic_.c_str(), odom_topic_.c_str(), costmap_topic_.c_str(), rate);
 }
 
 rclcpp_action::GoalResponse TrajectoryManagerNode::handleCommitGoal(
@@ -229,17 +231,36 @@ void TrajectoryManagerNode::executeCommit(
   double candidate_projected_time = 0.0;
   bool accepted = false;
   std::string reason;
+  const bool degraded_candidate =
+    goal->prefer_keep_active ||
+    isDegradedTrajectoryProduct(goal->product_type, goal->degraded_candidate);
+  const bool odom_rebase_eligible =
+    isOdomRebaseEligibleProduct(goal->product_type, goal->degraded_candidate);
   {
     std::lock_guard<std::mutex> lk(mutex_);
     const bool had_active = has_active_traj_;
-    if (goal->prefer_keep_active && had_active) {
-      transitionTo(State::REPLAN_PENDING, "candidate fallback prefers active trajectory");
-      result->active_valid = has_active_traj_;
-      result->trajectory_id = active_traj_.trajectory_id;
-      result->accepted = false;
-      result->reason = "fallback candidate ignored, active kept";
-      goal_handle->succeed(result);
-      return;
+    if (degraded_candidate && had_active) {
+      double active_projected_time = last_projected_time_;
+      double active_remaining = 0.0;
+      std::string keep_reason;
+      if (activeTrajectoryHealthyForKeep(active_projected_time, active_remaining, keep_reason)) {
+        result->active_valid = has_active_traj_;
+        result->trajectory_id = active_traj_.trajectory_id;
+        result->accepted = false;
+        result->reason =
+          "degraded candidate ignored, active kept: " + keep_reason +
+          " product=" + goal->product_type;
+        RCLCPP_INFO_THROTTLE(
+          get_logger(), *get_clock(), 1000,
+          "TrajectoryManager kept active trajectory over degraded product='%s': %s",
+          goal->product_type.c_str(), keep_reason.c_str());
+        goal_handle->succeed(result);
+        return;
+      }
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 1000,
+        "TrajectoryManager will evaluate degraded product='%s' because active is not healthy: %s",
+        goal->product_type.c_str(), keep_reason.c_str());
     }
     if (!had_active) {
       if (require_odom_ && !has_odom_) {
@@ -272,9 +293,10 @@ void TrajectoryManagerNode::executeCommit(
               out << "candidate collision at t=" << collision_time << " cost=" << collision_cost;
               reason = out.str();
             } else {
-              acceptTrajectory(candidate, candidate_projected_time, State::TRACKING, "new trajectory");
-              accepted = true;
-              reason = "accepted initial trajectory";
+              accepted = acceptTrajectory(
+                candidate, candidate_projected_time, State::TRACKING, "new trajectory");
+              reason = accepted ? "accepted initial trajectory" :
+                "initial trajectory acceptance failed";
             }
           }
         }
@@ -282,14 +304,36 @@ void TrajectoryManagerNode::executeCommit(
     } else {
       const bool new_goal = isNewGoal(candidate);
       bool connect_from_active = true;
-      if (shouldSwitchToCandidate(candidate, candidate_projected_time, connect_from_active)) {
-        acceptTrajectory(
+      bool should_accept = shouldSwitchToCandidate(
+        candidate, candidate_projected_time, connect_from_active);
+      if (!should_accept && odom_rebase_eligible) {
+        std::string executable_reason;
+        if (candidateExecutableFromOdom(candidate, candidate_projected_time, executable_reason)) {
+          connect_from_active = false;
+          should_accept = true;
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 1000,
+            "TrajectoryManager accepting product='%s' from odom rebase: %s",
+            goal->product_type.c_str(), executable_reason.c_str());
+        } else {
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 1000,
+            "TrajectoryManager rejected product='%s' after odom rebase check: %s",
+            goal->product_type.c_str(), executable_reason.c_str());
+        }
+      }
+      if (should_accept) {
+        accepted = acceptTrajectory(
           candidate, candidate_projected_time, new_goal ? State::TRACKING : State::SWITCHING,
           "new trajectory", connect_from_active);
-        accepted = true;
-        reason = "accepted candidate";
+        if (accepted) {
+          reason = (degraded_candidate || !connect_from_active) ?
+            "accepted odom-rebased candidate" : "accepted candidate";
+        } else {
+          reason = odom_rebase_eligible ? "odom-rebased candidate acceptance failed" :
+            "candidate acceptance failed";
+        }
       } else {
-        transitionTo(State::REPLAN_PENDING, "candidate rejected, keep active trajectory");
         reason = "candidate rejected, active kept";
       }
     }
@@ -299,7 +343,7 @@ void TrajectoryManagerNode::executeCommit(
 
   result->accepted = accepted;
   result->reason = reason;
-  if (accepted || (result->active_valid && goal->allow_keep_active_on_reject)) {
+  if (accepted || (result->active_valid && goal->allow_keep_active_on_reject && !odom_rebase_eligible)) {
     goal_handle->succeed(result);
   } else {
     goal_handle->abort(result);
@@ -333,6 +377,10 @@ void TrajectoryManagerNode::publishTimerCallback()
         publishStatus(publish_stamp, "emergency stop active");
         return;
       }
+      if (state_ == State::FINISHING) {
+        publishStatus(publish_stamp, "active trajectory completed");
+        return;
+      }
       transitionTo(State::IDLE, "no active trajectory");
       publishStatus(publish_stamp, "no active trajectory");
       return;
@@ -350,10 +398,16 @@ void TrajectoryManagerNode::publishTimerCallback()
 
     const double duration = trajectoryDuration(active_traj_);
     if (age > duration + active_timeout_sec_) {
-      publishEmergencyStop(now, "active trajectory exhausted");
-      transitionTo(State::EMERGENCY_STOP, "active trajectory exhausted");
-      has_active_traj_ = false;
-      publishStatus(now, "active trajectory exhausted");
+      double terminal_distance = std::numeric_limits<double>::infinity();
+      if (activeTrajectoryTerminalReached(terminal_distance)) {
+        completeActiveTrajectory("active trajectory completed");
+        publishStatus(now, "active trajectory completed");
+      } else {
+        publishEmergencyStop(now, "active trajectory exhausted");
+        transitionTo(State::EMERGENCY_STOP, "active trajectory exhausted");
+        has_active_traj_ = false;
+        publishStatus(now, "active trajectory exhausted");
+      }
       return;
     }
 
@@ -433,10 +487,16 @@ void TrajectoryManagerNode::publishTimerCallback()
 
     const double remaining = duration - last_projected_time_;
     if (remaining < emergency_stop_remaining_time_sec_) {
-      publishEmergencyStop(now, "remaining trajectory too short");
-      transitionTo(State::EMERGENCY_STOP, "remaining trajectory too short");
-      has_active_traj_ = false;
-      publishStatus(now, "remaining trajectory too short");
+      double terminal_distance = std::numeric_limits<double>::infinity();
+      if (activeTrajectoryTerminalReached(terminal_distance)) {
+        completeActiveTrajectory("active trajectory completed");
+        publishStatus(now, "active trajectory completed");
+      } else {
+        publishEmergencyStop(now, "remaining trajectory too short");
+        transitionTo(State::EMERGENCY_STOP, "remaining trajectory too short");
+        has_active_traj_ = false;
+        publishStatus(now, "remaining trajectory too short");
+      }
       return;
     }
     should_publish = publish_full_active_trajectory_;
@@ -449,7 +509,7 @@ void TrajectoryManagerNode::publishTimerCallback()
   }
 }
 
-void TrajectoryManagerNode::acceptTrajectory(
+bool TrajectoryManagerNode::acceptTrajectory(
   const sentry_nav_interfaces::msg::MincoTrajectory & msg,
   double projected_time,
   State next_state,
@@ -494,7 +554,7 @@ void TrajectoryManagerNode::acceptTrajectory(
         get_logger(), *get_clock(), 1000,
         "TrajectoryManager rejected candidate: cannot rebuild active trajectory for connection");
       transitionTo(State::REPLAN_PENDING, "active connection rebuild failed");
-      return;
+      return false;
     }
   } else if (connect_to_current_state) {
     if (has_odom_ && getOdomStateInTrajectoryFrame(msg, connect_pos, connect_vel)) {
@@ -507,7 +567,7 @@ void TrajectoryManagerNode::acceptTrajectory(
         get_logger(), *get_clock(), 1000,
         "TrajectoryManager rejected candidate: odom state unavailable for rebase");
       transitionTo(State::REPLAN_PENDING, "candidate odom rebase failed");
-      return;
+      return false;
     }
   }
 
@@ -518,7 +578,7 @@ void TrajectoryManagerNode::acceptTrajectory(
         get_logger(), *get_clock(), 1000,
         "TrajectoryManager rejected candidate: cannot rebase at t=%.2fs", projected_time);
       transitionTo(State::REPLAN_PENDING, "candidate rebase failed");
-      return;
+      return false;
     }
   } else {
     rebased = msg;
@@ -527,14 +587,14 @@ void TrajectoryManagerNode::acceptTrajectory(
   if (connect_to_current_state) {
     if (rebased.waypoints.empty()) {
       transitionTo(State::REPLAN_PENDING, "candidate rebase produced empty trajectory");
-      return;
+      return false;
     }
     rebased.waypoints.front().x = connect_pos.x();
     rebased.waypoints.front().y = connect_pos.y();
     rebased.waypoints.front().z = connect_pos.z();
     if (!trimConnectedTrajectoryStart(rebased, connect_pos, connect_vel)) {
       transitionTo(State::REPLAN_PENDING, "connected candidate start trim failed");
-      return;
+      return false;
     }
     rebased.initial_velocity.x = connect_vel.x();
     rebased.initial_velocity.y = connect_vel.y();
@@ -544,12 +604,12 @@ void TrajectoryManagerNode::acceptTrajectory(
     rebased.initial_acceleration.z = connect_acc.z();
     if (!validateTrajectory(rebased)) {
       transitionTo(State::REPLAN_PENDING, "connected candidate invalid");
-      return;
+      return false;
     }
     Trajectory<5> connected_traj;
     if (!buildTrajectory(rebased, connected_traj)) {
       transitionTo(State::REPLAN_PENDING, "connected candidate rebuild failed");
-      return;
+      return false;
     }
     double collision_time = 0.0;
     int collision_cost = 0;
@@ -561,7 +621,7 @@ void TrajectoryManagerNode::acceptTrajectory(
         "TrajectoryManager rejected connected candidate: collision at t=%.2fs cost=%d",
         collision_time, collision_cost);
       transitionTo(State::REPLAN_PENDING, "connected candidate collision");
-      return;
+      return false;
     }
   }
 
@@ -584,6 +644,7 @@ void TrajectoryManagerNode::acceptTrajectory(
     static_cast<long>(active_seq_), active_traj_.waypoints.size(),
     duration, projected_time);
   traj_pub_->publish(active_traj_);
+  return true;
 }
 
 void TrajectoryManagerNode::stampActiveTrajectoryTimeOrigin(
@@ -769,6 +830,173 @@ bool TrajectoryManagerNode::shouldSwitchToCandidate(
   return true;
 }
 
+bool TrajectoryManagerNode::activeTrajectoryHealthyForKeep(
+  double & projected_time,
+  double & remaining,
+  std::string & reason)
+{
+  reason.clear();
+  remaining = 0.0;
+  if (!has_active_traj_) {
+    reason = "no active trajectory";
+    return false;
+  }
+  if (state_ == State::IDLE || state_ == State::REPLAN_PENDING ||
+    state_ == State::EMERGENCY_STOP)
+  {
+    reason = std::string("state=") + stateName(state_);
+    return false;
+  }
+  if (require_odom_ && !has_odom_) {
+    reason = "waiting for odom";
+    return false;
+  }
+
+  Trajectory<5> active_traj;
+  if (!buildTrajectory(active_traj_, active_traj)) {
+    reason = "active rebuild failed";
+    return false;
+  }
+  const double duration = trajectoryDuration(active_traj_);
+  if (duration < switch_min_candidate_duration_sec_) {
+    reason = "active duration too short";
+    return false;
+  }
+
+  projected_time = last_projected_time_;
+  if (has_odom_ &&
+    !projectOdomToTrajectory(active_traj_, active_traj, last_projected_time_, projected_time))
+  {
+    if (require_odom_) {
+      reason = "active odom projection unavailable";
+      return false;
+    }
+    projected_time = last_projected_time_;
+  }
+  projected_time = std::clamp(
+    std::max(projected_time, last_projected_time_), 0.0, duration);
+  remaining = duration - projected_time;
+  if (remaining <= switch_allow_when_remaining_sec_) {
+    std::ostringstream out;
+    out << "active remaining " << remaining << "s <= keep threshold "
+        << switch_allow_when_remaining_sec_ << "s";
+    reason = out.str();
+    return false;
+  }
+  if (tracking_error_replan_count_ >= tracking_error_replan_frames_) {
+    reason = "tracking error already requested replan";
+    return false;
+  }
+  if (has_odom_) {
+    double rx = 0.0;
+    double ry = 0.0;
+    if (!getOdomPositionInTrajectoryFrame(active_traj_, rx, ry)) {
+      if (require_odom_) {
+        reason = "active odom position transform unavailable";
+        return false;
+      }
+    } else {
+      const auto ref_pos = active_traj.getPos(projected_time);
+      const double tracking_error = std::hypot(ref_pos.x() - rx, ref_pos.y() - ry);
+      const double max_error =
+        std::max(projection_max_tracking_error_, switch_max_position_error_);
+      if (tracking_error > max_error) {
+        std::ostringstream out;
+        out << "tracking error " << tracking_error << "m > " << max_error << "m";
+        reason = out.str();
+        return false;
+      }
+    }
+  }
+
+  double collision_time = 0.0;
+  int collision_cost = 0;
+  if (!trajectoryIsCollisionFree(
+      active_traj_, active_traj, projected_time, collision_check_horizon_sec_,
+      collision_time, collision_cost))
+  {
+    std::ostringstream out;
+    out << "active collision at t=" << collision_time << " cost=" << collision_cost;
+    reason = out.str();
+    return false;
+  }
+
+  std::ostringstream out;
+  out << "state=" << stateName(state_) << " remaining=" << remaining
+      << "s projected=" << projected_time << "s";
+  reason = out.str();
+  return true;
+}
+
+bool TrajectoryManagerNode::candidateExecutableFromOdom(
+  const sentry_nav_interfaces::msg::MincoTrajectory & candidate_msg,
+  double & candidate_projected_time,
+  std::string & reason)
+{
+  reason.clear();
+  const double candidate_duration = trajectoryDuration(candidate_msg);
+  if (candidate_duration < switch_min_candidate_duration_sec_) {
+    std::ostringstream out;
+    out << "candidate duration " << candidate_duration << "s < "
+        << switch_min_candidate_duration_sec_ << "s";
+    reason = out.str();
+    return false;
+  }
+  if (require_odom_ && !has_odom_) {
+    reason = "waiting for odom";
+    return false;
+  }
+
+  Trajectory<5> candidate_traj;
+  if (!buildTrajectory(candidate_msg, candidate_traj)) {
+    reason = "candidate rebuild failed";
+    return false;
+  }
+
+  candidate_projected_time = 0.0;
+  if (has_odom_) {
+    const double saved_window = projection_search_window_sec_;
+    projection_search_window_sec_ = std::max(candidate_projection_window_sec_, 1.5);
+    const bool projected = projectOdomToTrajectory(
+      candidate_msg, candidate_traj, 0.0, candidate_projected_time);
+    projection_search_window_sec_ = saved_window;
+    if (!projected) {
+      if (require_odom_) {
+        reason = "candidate odom projection unavailable";
+        return false;
+      }
+      candidate_projected_time = 0.0;
+    }
+  }
+  candidate_projected_time = std::clamp(candidate_projected_time, 0.0, candidate_duration);
+  const double remaining = candidate_duration - candidate_projected_time;
+  if (remaining <= emergency_stop_remaining_time_sec_) {
+    std::ostringstream out;
+    out << "candidate remaining " << remaining << "s <= emergency threshold "
+        << emergency_stop_remaining_time_sec_ << "s";
+    reason = out.str();
+    return false;
+  }
+
+  double collision_time = 0.0;
+  int collision_cost = 0;
+  if (!trajectoryIsCollisionFree(
+      candidate_msg, candidate_traj, candidate_projected_time, collision_check_horizon_sec_,
+      collision_time, collision_cost))
+  {
+    std::ostringstream out;
+    out << "candidate collision at t=" << collision_time << " cost=" << collision_cost;
+    reason = out.str();
+    return false;
+  }
+
+  std::ostringstream out;
+  out << "candidate executable from odom at t=" << candidate_projected_time
+      << "s remaining=" << remaining << "s";
+  reason = out.str();
+  return true;
+}
+
 void TrajectoryManagerNode::transitionTo(State next, const char * reason)
 {
   if (state_ == next) {
@@ -816,51 +1044,84 @@ void TrajectoryManagerNode::publishActiveTrajectory(const rclcpp::Time & stamp)
 
 void TrajectoryManagerNode::publishStatus(const rclcpp::Time & stamp, const char * reason)
 {
-  if (!status_pub_ && !status_text_pub_) {
+  if (!status_pub_) {
     return;
   }
-  if (status_pub_) {
-    sentry_nav_interfaces::msg::TrajectoryStatus status;
-    status.header.stamp = stamp;
-    status.header.frame_id = has_active_traj_ ? active_traj_.header.frame_id : "";
-    status.state = stateName(state_);
-    status.active = has_active_traj_;
-    status.emergency_stop = state_ == State::EMERGENCY_STOP && has_emergency_stop_;
-    status.trajectory_id = active_traj_.trajectory_id;
-    status.goal_id = active_goal_id_;
-    status.projected_time = last_projected_time_;
-    status.duration = has_active_traj_ ? trajectoryDuration(active_traj_) :
-      (has_emergency_stop_ ? trajectoryDuration(emergency_stop_traj_) : 0.0);
-    status.reason = reason;
-    status.last_transition = last_transition_reason_;
-    status_pub_->publish(status);
-  }
-
-  if (!status_text_pub_) {
-    return;
-  }
-  std_msgs::msg::String msg;
-  std::ostringstream out;
-  out << "stamp=" << stamp.seconds()
-      << " state=" << stateName(state_)
-      << " active=" << (has_active_traj_ ? 1 : 0)
-      << " trajectory_id=" << static_cast<unsigned long>(active_traj_.trajectory_id)
-      << " goal_id=" << static_cast<unsigned long>(active_goal_id_)
-      << " projected_time=" << last_projected_time_
-      << " duration=" << (has_active_traj_ ? trajectoryDuration(active_traj_) : 0.0)
-      << " reason=" << reason
-      << " last_transition=" << last_transition_reason_;
-  msg.data = out.str();
-  status_text_pub_->publish(msg);
+  sentry_nav_interfaces::msg::TrajectoryStatus status;
+  status.header.stamp = stamp;
+  status.header.frame_id = has_active_traj_ ? active_traj_.header.frame_id :
+    (has_emergency_stop_ ? emergency_stop_traj_.header.frame_id : "");
+  status.state = stateName(state_);
+  status.active = has_active_traj_;
+  status.emergency_stop = state_ == State::EMERGENCY_STOP && has_emergency_stop_;
+  status.trajectory_id = has_active_traj_ ? active_traj_.trajectory_id :
+    (has_emergency_stop_ ? emergency_stop_traj_.trajectory_id : 0);
+  status.goal_id = active_goal_id_;
+  status.projected_time = last_projected_time_;
+  status.duration = has_active_traj_ ? trajectoryDuration(active_traj_) :
+    (has_emergency_stop_ ? trajectoryDuration(emergency_stop_traj_) : 0.0);
+  status.reason = reason;
+  status.last_transition = last_transition_reason_;
+  status.replan_requested =
+    state_ == State::REPLAN_PENDING ||
+    (state_ == State::EMERGENCY_STOP && has_emergency_stop_) ||
+    (!has_active_traj_ && state_ != State::FINISHING);
+  status.replan_reason = status.replan_requested ? reason : "";
+  status_pub_->publish(status);
 }
 
 void TrajectoryManagerNode::publishEmergencyStop(const rclcpp::Time & stamp, const char * reason)
 {
   sentry_nav_interfaces::msg::MincoTrajectory stop;
-  stop.header.frame_id = active_traj_.header.frame_id.empty() ? "map" : active_traj_.header.frame_id;
+  std::string stop_source;
+  if (!buildEmergencyStopTrajectory(stamp, reason, stop, stop_source)) {
+    RCLCPP_WARN(get_logger(), "TrajectoryManager emergency stop skipped: no stop point (%s)", reason);
+    return;
+  }
+
+  emergency_stop_traj_ = stop;
+  has_emergency_stop_ = true;
+  traj_pub_->publish(stop);
+  RCLCPP_WARN(
+    get_logger(),
+    "TrajectoryManager published emergency stop: %s source=%s point=(%.2f, %.2f)",
+    reason, stop_source.c_str(), stop.waypoints.front().x, stop.waypoints.front().y);
+}
+
+void TrajectoryManagerNode::publishLastEmergencyStop(const rclcpp::Time & stamp)
+{
+  if (!has_emergency_stop_) {
+    return;
+  }
+  sentry_nav_interfaces::msg::MincoTrajectory stop;
+  std::string stop_source;
+  if (buildEmergencyStopTrajectory(stamp, "emergency stop active", stop, stop_source)) {
+    stop.trajectory_id = emergency_stop_traj_.trajectory_id;
+    stop.goal_id = emergency_stop_traj_.goal_id;
+    emergency_stop_traj_ = stop;
+  } else {
+    const int64_t start_ns = stamp.nanoseconds();
+    emergency_stop_traj_.header.stamp = stamp;
+    emergency_stop_traj_.start_time.sec = static_cast<int32_t>(start_ns / 1000000000LL);
+    emergency_stop_traj_.start_time.nanosec = static_cast<uint32_t>(start_ns % 1000000000LL);
+  }
+  traj_pub_->publish(emergency_stop_traj_);
+}
+
+bool TrajectoryManagerNode::buildEmergencyStopTrajectory(
+  const rclcpp::Time & stamp,
+  const char *,
+  sentry_nav_interfaces::msg::MincoTrajectory & stop,
+  std::string & stop_source)
+{
+  stop = sentry_nav_interfaces::msg::MincoTrajectory{};
+  stop.header.frame_id = active_traj_.header.frame_id.empty() ?
+    (emergency_stop_traj_.header.frame_id.empty() ? "map" : emergency_stop_traj_.header.frame_id) :
+    active_traj_.header.frame_id;
   stop.header.stamp = stamp;
-  stop.trajectory_id = static_cast<uint64_t>(++active_seq_);
-  stop.goal_id = active_goal_id_;
+  stop.trajectory_id = has_emergency_stop_ && emergency_stop_traj_.trajectory_id != 0 ?
+    emergency_stop_traj_.trajectory_id : static_cast<uint64_t>(++active_seq_);
+  stop.goal_id = active_goal_id_ != 0 ? active_goal_id_ : emergency_stop_traj_.goal_id;
   const int64_t start_ns = stamp.nanoseconds();
   stop.start_time.sec = static_cast<int32_t>(start_ns / 1000000000LL);
   stop.start_time.nanosec = static_cast<uint32_t>(start_ns % 1000000000LL);
@@ -868,6 +1129,7 @@ void TrajectoryManagerNode::publishEmergencyStop(const rclcpp::Time & stamp, con
 
   geometry_msgs::msg::Point p;
   bool have_stop_point = false;
+  stop_source = "none";
   if (has_odom_ && !stop.header.frame_id.empty()) {
     sentry_nav_interfaces::msg::MincoTrajectory frame_msg;
     frame_msg.header.frame_id = stop.header.frame_id;
@@ -878,6 +1140,7 @@ void TrajectoryManagerNode::publishEmergencyStop(const rclcpp::Time & stamp, con
       p.y = pos.y();
       p.z = pos.z();
       have_stop_point = true;
+      stop_source = "odom";
     }
   }
   Trajectory<5> traj;
@@ -888,13 +1151,20 @@ void TrajectoryManagerNode::publishEmergencyStop(const rclcpp::Time & stamp, con
     p.y = pos.y();
     p.z = pos.z();
     have_stop_point = true;
-  } else if (!active_traj_.waypoints.empty()) {
+    stop_source = "active_projection";
+  }
+  if (!have_stop_point && !active_traj_.waypoints.empty()) {
     p = active_traj_.waypoints.front();
     have_stop_point = true;
+    stop_source = "active_front";
+  }
+  if (!have_stop_point && !emergency_stop_traj_.waypoints.empty()) {
+    p = emergency_stop_traj_.waypoints.front();
+    have_stop_point = true;
+    stop_source = "previous_hold";
   }
   if (!have_stop_point) {
-    RCLCPP_WARN(get_logger(), "TrajectoryManager emergency stop skipped: no stop point (%s)", reason);
-    return;
+    return false;
   }
 
   stop.waypoints.push_back(p);
@@ -905,30 +1175,33 @@ void TrajectoryManagerNode::publishEmergencyStop(const rclcpp::Time & stamp, con
   stop.initial_acceleration.x = 0.0;
   stop.initial_acceleration.y = 0.0;
   stop.initial_acceleration.z = 0.0;
-  emergency_stop_traj_ = stop;
-  has_emergency_stop_ = true;
-  traj_pub_->publish(stop);
-  RCLCPP_WARN(get_logger(), "TrajectoryManager published emergency stop: %s", reason);
-}
-
-void TrajectoryManagerNode::publishLastEmergencyStop(const rclcpp::Time & stamp)
-{
-  if (!has_emergency_stop_) {
-    return;
-  }
-  const int64_t start_ns = stamp.nanoseconds();
-  emergency_stop_traj_.header.stamp = stamp;
-  emergency_stop_traj_.start_time.sec = static_cast<int32_t>(start_ns / 1000000000LL);
-  emergency_stop_traj_.start_time.nanosec = static_cast<uint32_t>(start_ns % 1000000000LL);
-  traj_pub_->publish(emergency_stop_traj_);
+  stop.terminal_stop = true;
+  stop.terminal_velocity.x = 0.0;
+  stop.terminal_velocity.y = 0.0;
+  stop.terminal_velocity.z = 0.0;
+  stop.terminal_acceleration.x = 0.0;
+  stop.terminal_acceleration.y = 0.0;
+  stop.terminal_acceleration.z = 0.0;
+  return true;
 }
 
 void TrajectoryManagerNode::clearActiveTrajectory(const char * reason)
 {
   has_active_traj_ = false;
+  has_emergency_stop_ = false;
   last_projected_time_ = 0.0;
   active_goal_id_ = 0;
   transitionTo(State::IDLE, reason);
+}
+
+void TrajectoryManagerNode::completeActiveTrajectory(const char * reason)
+{
+  has_active_traj_ = false;
+  has_emergency_stop_ = false;
+  last_projected_time_ = 0.0;
+  active_goal_id_ = 0;
+  tracking_error_replan_count_ = 0;
+  transitionTo(State::FINISHING, reason);
 }
 
 bool TrajectoryManagerNode::validateTrajectory(
@@ -943,6 +1216,22 @@ bool TrajectoryManagerNode::validateTrajectory(
     }
   }
   return true;
+}
+
+bool TrajectoryManagerNode::activeTrajectoryTerminalReached(double & terminal_distance)
+{
+  terminal_distance = std::numeric_limits<double>::infinity();
+  if (!has_active_traj_ || active_traj_.waypoints.empty() || !has_odom_) {
+    return false;
+  }
+  double rx = 0.0;
+  double ry = 0.0;
+  if (!getOdomPositionInTrajectoryFrame(active_traj_, rx, ry)) {
+    return false;
+  }
+  const auto & terminal = active_traj_.waypoints.back();
+  terminal_distance = std::hypot(terminal.x - rx, terminal.y - ry);
+  return terminal_distance <= terminal_arrival_distance_;
 }
 
 double TrajectoryManagerNode::trajectoryDuration(
@@ -969,8 +1258,8 @@ bool TrajectoryManagerNode::isNewGoal(
   if (!has_active_traj_) {
     return false;
   }
-  if (active_goal_id_ != 0 && msg.goal_id != 0 && msg.goal_id != active_goal_id_) {
-    return true;
+  if (active_goal_id_ != 0 && msg.goal_id != 0) {
+    return msg.goal_id != active_goal_id_;
   }
   return endpointDistance(active_traj_, msg) > switch_goal_change_distance_;
 }
@@ -1057,6 +1346,12 @@ bool TrajectoryManagerNode::cropTrajectory(
   dst.initial_acceleration.x = acc.x();
   dst.initial_acceleration.y = acc.y();
   dst.initial_acceleration.z = acc.z();
+  dst.goal_id = src.goal_id;
+  dst.trajectory_id = src.trajectory_id;
+  dst.start_time = src.start_time;
+  dst.terminal_stop = src.terminal_stop;
+  dst.terminal_velocity = src.terminal_velocity;
+  dst.terminal_acceleration = src.terminal_acceleration;
   return true;
 }
 
@@ -1293,6 +1588,10 @@ bool TrajectoryManagerNode::buildTrajectory(
   head.col(2) = Eigen::Vector3d(
     msg.initial_acceleration.x, msg.initial_acceleration.y, msg.initial_acceleration.z);
   tail.col(0) = pts.back();
+  tail.col(1) = Eigen::Vector3d(
+    msg.terminal_velocity.x, msg.terminal_velocity.y, msg.terminal_velocity.z);
+  tail.col(2) = Eigen::Vector3d(
+    msg.terminal_acceleration.x, msg.terminal_acceleration.y, msg.terminal_acceleration.z);
 
   Eigen::Matrix3Xd inner(3, std::max(0, pieces - 1));
   for (int i = 1; i < pieces; ++i) {

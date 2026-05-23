@@ -154,6 +154,39 @@ TEST(MincoOptimizer, NoLbfgs)
   checkResult(res, output, input);
 }
 
+TEST(MincoOptimizer, ReferenceTrajectoryUsesNonzeroInitialVelocity)
+{
+  MincoOptimizer::Options options;
+  options.enabled = true;
+  options.use_lbfgs = false;
+  options.v_ref = 1.8;
+  options.v_max = 2.2;
+  options.a_max = 3.4;
+  options.min_segment_time = 0.10;
+  options.max_segment_time = 4.0;
+  options.w_velocity = 1.0;
+  options.w_acceleration = 0.5;
+  MincoOptimizer opt(options);
+
+  auto input = makePath({{0,0},{1,0},{2,0},{3,0},{4,0},{5,0}});
+  nav_msgs::msg::Path output;
+  MincoOptimizer::Result result;
+  Eigen::Vector3d initial_velocity(1.6, 0.0, 0.0);
+  Eigen::Vector3d initial_acceleration = Eigen::Vector3d::Zero();
+  Eigen::Vector3d terminal_velocity(1.8, 0.0, 0.0);
+  Eigen::Vector3d terminal_acceleration = Eigen::Vector3d::Zero();
+
+  ASSERT_TRUE(opt.buildReferenceTrajectory(
+    input, result, output, nullptr,
+    &initial_velocity, &initial_acceleration,
+    &terminal_velocity, &terminal_acceleration));
+  checkResult(result, output, input);
+  EXPECT_NEAR(result.initial_velocity.x(), 1.6, 0.05);
+  EXPECT_NEAR(result.terminal_velocity.x(), 1.8, 0.05);
+  EXPECT_LT(result.traj_duration, 4.0);
+  EXPECT_GT(result.max_velocity, 1.4);
+}
+
 int main(int argc, char ** argv)
 {
   testing::InitGoogleTest(&argc, argv);

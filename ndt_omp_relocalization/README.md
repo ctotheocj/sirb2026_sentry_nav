@@ -1,9 +1,10 @@
 # ndt_omp_relocalization
 
-`ndt_omp_relocalization_node` is the prior-map relocalization backend used by
-`sirb2026_nav_bringup` when `slam=false`. It registers the current `registered_scan`
-against a prior PCD map with NDT-OMP and continuously publishes the correction transform
-from `map` to `odom`.
+`ndt_omp_relocalization_node` is the legacy/fallback prior-map relocalization backend used
+by `sirb2026_nav_bringup` when `localization_backend:=ndt`. It registers the current
+`registered_scan` against a prior PCD map with NDT-OMP and publishes a quality-gated
+correction transform from `map` to `odom`. Point-LIO remains the high-rate `odom -> base`
+source; NDT is the lower-rate global drift correction layer.
 
 ## Runtime Chain
 
@@ -13,8 +14,9 @@ Point-LIO -> cloud_registered
   -> ndt_omp_relocalization -> map -> odom TF
 ```
 
-The top-level launch passes `prior_pcd_file` from the selected world, so the package-level
-standalone launch is mainly a minimal smoke-test entry point.
+The top-level launch passes `prior_pcd_file` from the selected world. The package-level
+standalone launch also accepts `prior_pcd_file:=...` and uses the same default frame names as
+the main navigation chain, so it can be used as a minimal NDT smoke-test entry point.
 
 ## Topics
 
@@ -29,7 +31,8 @@ Published:
 
 | Output | Notes |
 | --- | --- |
-| `map -> odom` TF | Published periodically so the map frame remains available |
+| `map -> odom` TF | Trusted NDT results update the correction; when gated, the node holds the last trusted correction. Before the first trusted result, it publishes the configured initial pose so the `map` frame exists |
+| `ndt_omp_relocalization/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` consumed by `LocalizationReady` in the default BT |
 
 ## Parameters
 
@@ -42,10 +45,10 @@ Published:
 | `ndt_max_iterations` | `30` | Maximum optimization iterations |
 | `ndt_search_method` | `1` | `0` KDTREE, `1` DIRECT7, `2` DIRECT1, `3` DIRECT26 |
 | `fitness_score_threshold` | `1.0` | Max accepted NDT fitness score |
-| `registration_period_ms` | `300` | Registration timer period |
+| `registration_period_ms` | `300` | Registration timer period; default bringup uses 250 ms |
 | `global_leaf_size` | `0.25` | Prior map voxel filter leaf size |
 | `registered_leaf_size` | `0.25` | Input scan voxel filter leaf size |
-| `min_source_points` | `1000` | Minimum raw source points |
+| `min_source_points` | `1000` | Minimum raw source points; default bringup uses 800 for MID360/simulation scans |
 | `min_filtered_points` | `120` | Minimum filtered source points |
 | `max_scan_age_sec` | `0.5` | Drop stale input cloud |
 | `map_frame` | `map` | Map frame |
@@ -56,9 +59,9 @@ Published:
 | `init_pose` | `[0,0,0,0,0,0]` | Initial `[x,y,z,roll,pitch,yaw]` |
 | `enable_roll_pitch_fix` | `true` | Zero roll/pitch in published correction |
 | `trust_ndt_threshold` | `5` | Consecutive converged registrations before trusting |
-| `jump_threshold_xy` | `0.5` | XY jump gate |
-| `jump_threshold_yaw` | `0.3` | Yaw jump gate |
-| `jump_threshold_rp` | `0.1` | Roll/pitch jump gate |
+| `jump_threshold_xy` | `0.5` | XY jump gate; default bringup uses 0.30 m |
+| `jump_threshold_yaw` | `0.3` | Yaw jump gate; default bringup uses 0.45 rad |
+| `jump_threshold_rp` | `0.1` | Roll/pitch jump gate; default bringup uses 0.18 rad |
 | `enable_quality_gate` | `true` | Enable residual/overlap quality checks |
 | `quality_sample_points` | `1500` | Max sampled points for quality gate |
 | `quality_max_corr_dist` | `1.0` | Nearest-neighbor correspondence range |
@@ -66,10 +69,16 @@ Published:
 | `quality_min_overlap_ratio` | `0.35` | Minimum overlap ratio |
 | `quality_max_median_residual` | `0.35` | Median residual gate |
 | `quality_max_p90_residual` | `1.0` | 90th percentile residual gate |
-| `publish_tf_only_when_trusted` | `false` | Keep false in this stack so `map` exists during startup |
-| `freeze_tf_when_not_trusted` | `false` | Hold last trusted transform while untrusted |
+| `publish_tf_only_when_trusted` | `false` | Default bringup sets true so untrusted NDT registrations cannot pull `map -> odom`; the initial pose is still published before the first trusted result |
+| `freeze_tf_when_not_trusted` | `false` | Default bringup sets true to hold the last trusted correction while NDT is untrusted |
 
-The current source does not declare `lidar_frame` or `use_scan_stamp_for_tf`.
+The diagnostic array contains a single status from `ndt_omp_relocalization`. Important
+key/value fields are
+`localization_state`, `trusted`, `fitness`, `overlap`, `source_points`,
+`filtered_points`, `jump_rejected`, and `tf_mode`.
+
+The current source does not declare `lidar_frame` or `use_scan_stamp_for_tf`; those are not
+valid parameters for this package.
 
 ## Build
 

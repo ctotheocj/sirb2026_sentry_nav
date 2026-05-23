@@ -1,7 +1,8 @@
 # dynamic_obstacle_tracker
 
 `dynamic_obstacle_tracker` converts the dynamic point cloud produced by
-`dynamic_point_detector` into tracked obstacle predictions for the MPC controller.
+`dynamic_point_detector` into tracked obstacle predictions for the MPC controller,
+smoother, and BT trajectory replan checks when dynamic-obstacle mode is enabled.
 
 ## Current Chain
 
@@ -11,12 +12,14 @@ registered_scan + odometry
   -> dynamic_points
   -> dynamic_obstacle_tracker
   -> dynamic_obstacles
-  -> f_mpc_controller
+  -> f_mpc_controller / safe_geometric_smoother / ReplanCondition
 ```
 
 The tracker no longer performs raw point-cloud ground segmentation itself. Ground/static
 separation is owned by `dynamic_point_detector`; this package clusters `dynamic_points`,
 associates detections across frames, and publishes predicted obstacle positions.
+The old standalone DBSCAN/EKF/ground-filter header-only implementation was removed because
+it was not built or launched by the current navigation stack.
 
 ## Node
 

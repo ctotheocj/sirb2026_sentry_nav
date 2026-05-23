@@ -3,7 +3,7 @@
 <package format="3">
   <name>sentry_nav_interfaces</name>
   <version>0.1.0</version>
-  <description>Navigation interface messages for sirb2026 sentry: tracked obstacles and timestamped paths.</description>
+  <description>Navigation interface messages for sirb2026 sentry planning, tracking, and hole-pass control.</description>
   <maintainer email="pan@example.com">Pan</maintainer>
   <license>Apache-2.0</license>
 

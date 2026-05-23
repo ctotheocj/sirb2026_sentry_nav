@@ -9,3 +9,5 @@ float64 projected_time
 float64 duration
 string reason
 string last_transition
+bool replan_requested
+string replan_reason

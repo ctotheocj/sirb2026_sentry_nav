@@ -3,9 +3,12 @@
 `dodge_manager_node` listens for referee-system HP deduction events and can temporarily
 take over velocity output to execute evasive moves inside a configured dodge zone.
 
-The top-level navigation launch files start `dodge_manager_node` unconditionally. Whether it
-actually performs evasive actions is controlled only by
-`dodge_manager.ros__parameters.enable_dodge` in the YAML.
+The top-level navigation launch files do not start `dodge_manager_node` by default.
+Set `use_dodge_manager:=True` to launch it; the launch file also overrides
+`dodge_manager.ros__parameters.enable_dodge` to the same value.
+
+`dodge_manager_node` publishes directly to `cmd_vel` while active. Keep it disabled for the
+normal Nav2/MPC command chain unless a separate command-arbitration policy is in place.
 
 ## Topics
 

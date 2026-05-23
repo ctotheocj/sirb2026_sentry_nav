@@ -189,6 +189,7 @@ private:
     std::vector<int> & col_cover,
     int dim)
   {
+    (void)cost;
     // Find primed zero (from step 4)
     int path_row = -1, path_col = -1;
     for (int i = 0; i < dim && path_row < 0; ++i) {
@@ -260,6 +261,7 @@ private:
     std::vector<int> & col_cover,
     int dim)
   {
+    (void)mask;
     // Find minimum uncovered value
     double min_val = std::numeric_limits<double>::max();
     for (int i = 0; i < dim; ++i) {

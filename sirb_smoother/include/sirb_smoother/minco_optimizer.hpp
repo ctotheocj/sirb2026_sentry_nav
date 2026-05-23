@@ -37,6 +37,9 @@ public:
     double corner_time_weight{0.20};
     double sample_resolution{0.10};
     int max_pieces{80};
+    double waypoint_time_step{0.35};
+    double min_waypoint_spacing{0.10};
+    int max_waypoints{0};
     bool use_lbfgs{true};
     bool guide_fillet_enabled{true};
     double guide_fillet_radius{0.60};
@@ -109,6 +112,9 @@ public:
     double max_acceleration{0.0};
     Eigen::Vector3d initial_velocity{Eigen::Vector3d::Zero()};
     Eigen::Vector3d initial_acceleration{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d terminal_velocity{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d terminal_acceleration{Eigen::Vector3d::Zero()};
+    bool terminal_stop{true};
     std::vector<Eigen::Vector3d> input_waypoints;
     std::vector<Eigen::Vector3d> optimized_waypoints;
     Eigen::VectorXd optimized_times;
@@ -127,26 +133,34 @@ public:
     const std::vector<DynamicObstacle> * dynamic_obstacles = nullptr,
     const std::function<bool()> * should_cancel = nullptr,
     const Eigen::Vector3d * initial_velocity = nullptr,
-    const Eigen::Vector3d * initial_acceleration = nullptr) const;
+    const Eigen::Vector3d * initial_acceleration = nullptr,
+    const Eigen::Vector3d * terminal_velocity = nullptr,
+    const Eigen::Vector3d * terminal_acceleration = nullptr) const;
 
   bool buildTrajectory(
     const std::vector<Eigen::Vector3d> & points, const Eigen::VectorXd & times,
     Trajectory<5> & traj,
     const Eigen::Vector3d * initial_velocity = nullptr,
-    const Eigen::Vector3d * initial_acceleration = nullptr) const;
+    const Eigen::Vector3d * initial_acceleration = nullptr,
+    const Eigen::Vector3d * terminal_velocity = nullptr,
+    const Eigen::Vector3d * terminal_acceleration = nullptr) const;
   bool buildReferenceTrajectory(
     const nav_msgs::msg::Path & input, Result & result, nav_msgs::msg::Path & output,
     std::string * diagnostic = nullptr,
     const Eigen::Vector3d * initial_velocity = nullptr,
-    const Eigen::Vector3d * initial_acceleration = nullptr) const;
+    const Eigen::Vector3d * initial_acceleration = nullptr,
+    const Eigen::Vector3d * terminal_velocity = nullptr,
+    const Eigen::Vector3d * terminal_acceleration = nullptr) const;
   bool enforceDynamicFeasibility(
     const std::vector<Eigen::Vector3d> & points, Eigen::VectorXd & times,
     Trajectory<5> & traj, double & max_velocity, double & max_acceleration,
     std::string * diagnostic = nullptr,
     const Eigen::Vector3d * initial_velocity = nullptr,
-    const Eigen::Vector3d * initial_acceleration = nullptr) const;
+    const Eigen::Vector3d * initial_acceleration = nullptr,
+    const Eigen::Vector3d * terminal_velocity = nullptr,
+    const Eigen::Vector3d * terminal_acceleration = nullptr) const;
 
-private:
+  private:
   struct GuidePath
   {
     std::vector<Eigen::Vector3d> points;
@@ -175,6 +189,8 @@ private:
     const std::function<bool()> * should_cancel{nullptr};
     const Eigen::Vector3d * initial_velocity{nullptr};
     const Eigen::Vector3d * initial_acceleration{nullptr};
+    const Eigen::Vector3d * terminal_velocity{nullptr};
+    const Eigen::Vector3d * terminal_acceleration{nullptr};
     bool is_fine_stage{false};
     int n_pts{0};
   };
@@ -182,13 +198,21 @@ private:
   bool buildGuidePath(const nav_msgs::msg::Path & path, GuidePath & guide) const;
   bool buildWaypoints(
     const GuidePath & guide, std::vector<Eigen::Vector3d> & points,
-    Eigen::VectorXd & times) const;
+    Eigen::VectorXd & times,
+    const Eigen::Vector3d * initial_velocity = nullptr,
+    const Eigen::Vector3d * terminal_velocity = nullptr) const;
   Eigen::Vector3d guidePointAt(const GuidePath & guide, double arc_s) const;
   GuideProjection projectToGuide(
     const GuidePath & guide, const Eigen::Vector3d & point, double hint_s,
     double search_radius) const;
   void assignSegmentTimes(
-    const std::vector<Eigen::Vector3d> & points, Eigen::VectorXd & times) const;
+    const std::vector<Eigen::Vector3d> & points, Eigen::VectorXd & times,
+    const Eigen::Vector3d * initial_velocity = nullptr,
+    const Eigen::Vector3d * terminal_velocity = nullptr) const;
+  double boundarySpeedAlongSegment(
+    const Eigen::Vector3d * velocity,
+    const Eigen::Vector3d & from,
+    const Eigen::Vector3d & to) const;
   void smoothSegmentTimes(Eigen::VectorXd & times) const;
   int optimizeWaypoints(
     std::vector<Eigen::Vector3d> & points, const GuidePath & guide, Eigen::VectorXd & times,
@@ -198,7 +222,9 @@ private:
     int max_iterations, double & final_cost, bool is_fine_stage = false,
     const std::function<bool()> * should_cancel = nullptr,
     const Eigen::Vector3d * initial_velocity = nullptr,
-    const Eigen::Vector3d * initial_acceleration = nullptr) const;
+    const Eigen::Vector3d * initial_acceleration = nullptr,
+    const Eigen::Vector3d * terminal_velocity = nullptr,
+    const Eigen::Vector3d * terminal_acceleration = nullptr) const;
   double evaluateObjective(
     const Eigen::VectorXd & x, Eigen::VectorXd & grad,
     const OptimizationData & data) const;
@@ -225,7 +251,9 @@ private:
     Eigen::Matrix3d & head_state,
     Eigen::Matrix3d & tail_state,
     const Eigen::Vector3d * head_vel_override = nullptr,
-    const Eigen::Vector3d * head_acc_override = nullptr) const;
+    const Eigen::Vector3d * head_acc_override = nullptr,
+    const Eigen::Vector3d * tail_vel_override = nullptr,
+    const Eigen::Vector3d * tail_acc_override = nullptr) const;
   double segmentTime(
     const Eigen::Vector3d & prev, const Eigen::Vector3d & current,
     const Eigen::Vector3d & next) const;

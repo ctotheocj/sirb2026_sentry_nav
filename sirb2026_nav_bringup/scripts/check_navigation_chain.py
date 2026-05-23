@@ -82,9 +82,13 @@ SUPPORT_CHECKS = (
         msg_type="sensor_msgs/msg/PointCloud2",
         expected_rate="Point-LIO/loam output",
         required_publishers=("loam_interface",),
-        required_subscribers=("ndt_omp_relocalization",),
-        optional_subscribers=("lidar_preprocessor", "sensor_scan_generation", "dynamic_point_detector"),
-        note="NDT-only relocalization input",
+        optional_subscribers=(
+            "ndt_omp_relocalization",
+            "lidar_preprocessor",
+            "sensor_scan_generation",
+            "dynamic_point_detector",
+        ),
+        note="registered scan shared by perception and optional NDT fallback",
     ),
     TopicCheck(
         phase="localization",
@@ -130,36 +134,55 @@ SUPPORT_CHECKS = (
     ),
 )
 
-CORE_CHECKS = (
+SLAM_SUPPORT_CHECKS = (
     TopicCheck(
-        phase="dynamic_perception",
+        phase="slam",
+        topic="cloud_registered",
+        msg_type="sensor_msgs/msg/PointCloud2",
+        expected_rate="Point-LIO output",
+        required_publishers=("point_lio",),
+        required_subscribers=("loam_interface",),
+        note="Point-LIO to registered_scan bridge input",
+    ),
+    TopicCheck(
+        phase="slam",
         topic="registered_scan",
         msg_type="sensor_msgs/msg/PointCloud2",
         expected_rate="Point-LIO/loam output",
         required_publishers=("loam_interface",),
-        required_subscribers=("dynamic_point_detector",),
         optional_subscribers=("lidar_preprocessor", "sensor_scan_generation"),
-        note="entry point for dynamic point extraction",
+        note="online map and obstacle-grid source in slam mode",
     ),
     TopicCheck(
-        phase="dynamic_perception",
-        topic="dynamic_points",
+        phase="slam",
+        topic="map",
+        msg_type="nav_msgs/msg/OccupancyGrid",
+        expected_rate="slam_toolbox update",
+        required_publishers=("slam_toolbox",),
+        required_subscribers=("global_costmap",),
+        note="global_costmap.static_layer.map_topic",
+    ),
+    TopicCheck(
+        phase="slam",
+        topic="obstacle_cloud",
         msg_type="sensor_msgs/msg/PointCloud2",
         expected_rate="registered_scan dependent",
-        required_publishers=("dynamic_point_detector",),
-        required_subscribers=("dynamic_obstacle_tracker",),
-        note="M-detector output; must stay relative to namespace",
+        required_publishers=("lidar_preprocessor",),
+        required_subscribers=("grid_map_node",),
+        note="registered_scan filtered for online occupancy grid",
     ),
     TopicCheck(
-        phase="dynamic_tracking",
-        topic="dynamic_obstacles",
-        msg_type="sentry_nav_interfaces/msg/TrackedObstacleArray",
-        expected_rate="dynamic_points dependent",
-        required_publishers=("dynamic_obstacle_tracker",),
-        required_subscribers=("controller_server",),
-        optional_subscribers=("bt_navigator", "smoother_server"),
-        note="MPC dynamic obstacle avoidance input",
+        phase="slam",
+        topic="occupancy_grid",
+        msg_type="nav_msgs/msg/OccupancyGrid",
+        expected_rate="grid_map update",
+        required_publishers=("grid_map_node",),
+        required_subscribers=("global_costmap",),
+        note="global_costmap.occupancy_grid_layer.topic",
     ),
+)
+
+CORE_CHECKS = (
     TopicCheck(
         phase="trajectory",
         topic="trajectory_manager/trajectory_for_mpc",
@@ -215,12 +238,47 @@ CORE_CHECKS = (
     ),
 )
 
-AGE_CHECKS = (
-    AgeCheck("registered_scan", 0.5, note="dynamic perception input freshness"),
-    AgeCheck("dynamic_points", 0.8, note="M-detector output freshness"),
-    AgeCheck("dynamic_obstacles", 0.8, note="tracked obstacle freshness"),
+PRIMARY_AGE_CHECKS = (
+    AgeCheck("registered_scan", 0.5, note="localization/perception input freshness"),
     AgeCheck("odometry", 0.5, note="state estimate freshness"),
     AgeCheck("trajectory_manager/trajectory_for_mpc", 0.8, required=False, note="active only while navigating"),
+)
+
+DYNAMIC_OBSTACLE_CHECKS = (
+    TopicCheck(
+        phase="dynamic_perception",
+        topic="registered_scan",
+        msg_type="sensor_msgs/msg/PointCloud2",
+        expected_rate="Point-LIO/loam output",
+        required_publishers=("loam_interface",),
+        required_subscribers=("dynamic_point_detector",),
+        optional_subscribers=("lidar_preprocessor", "sensor_scan_generation"),
+        note="entry point for dynamic point extraction",
+    ),
+    TopicCheck(
+        phase="dynamic_perception",
+        topic="dynamic_points",
+        msg_type="sensor_msgs/msg/PointCloud2",
+        expected_rate="registered_scan dependent",
+        required_publishers=("dynamic_point_detector",),
+        required_subscribers=("dynamic_obstacle_tracker",),
+        note="M-detector output; must stay relative to namespace",
+    ),
+    TopicCheck(
+        phase="dynamic_tracking",
+        topic="dynamic_obstacles",
+        msg_type="sentry_nav_interfaces/msg/TrackedObstacleArray",
+        expected_rate="dynamic_points dependent",
+        required_publishers=("dynamic_obstacle_tracker",),
+        required_subscribers=("controller_server",),
+        optional_subscribers=("bt_navigator", "smoother_server"),
+        note="MPC/smoother dynamic obstacle constraints and BT trajectory replan checks",
+    ),
+)
+
+DYNAMIC_OBSTACLE_AGE_CHECKS = (
+    AgeCheck("dynamic_points", 0.8, note="M-detector output freshness"),
+    AgeCheck("dynamic_obstacles", 0.8, note="tracked obstacle freshness"),
 )
 
 TF_CHECKS = (
@@ -751,6 +809,11 @@ def main() -> int:
         help="check only the fixed acceptance chain, not map/odom/static-costmap support topics",
     )
     parser.add_argument(
+        "--slam",
+        action="store_true",
+        help="check SLAM bringup support topics instead of prior-map localization topics",
+    )
+    parser.add_argument(
         "--measure-hz",
         action="store_true",
         help="sample topic frequencies; this adds a few seconds per topic",
@@ -760,6 +823,11 @@ def main() -> int:
         "--strict-stale",
         action="store_true",
         help="fail if old terrain_map or terrain_map_ext topics are still present in simulation",
+    )
+    parser.add_argument(
+        "--dynamic-obstacles",
+        action="store_true",
+        help="also require the optional dynamic point detection/tracking chain",
     )
     parser.add_argument(
         "--skip-age",
@@ -787,7 +855,10 @@ def main() -> int:
     print("SIRB 2026 navigation acceptance chain")
     print(f"namespace=/{namespace}" if namespace else "namespace=<none>")
 
-    checks = CORE_CHECKS if args.no_support else SUPPORT_CHECKS + CORE_CHECKS
+    support_checks = SLAM_SUPPORT_CHECKS if args.slam else SUPPORT_CHECKS
+    checks = CORE_CHECKS if args.no_support else support_checks + CORE_CHECKS
+    if args.dynamic_obstacles:
+        checks = checks + DYNAMIC_OBSTACLE_CHECKS
     failures = 0
     warnings = 0
     for check in checks:
@@ -816,7 +887,10 @@ def main() -> int:
             warnings += tf_warnings
 
     if not args.skip_age:
-        for check in AGE_CHECKS:
+        age_checks = PRIMARY_AGE_CHECKS
+        if args.dynamic_obstacles:
+            age_checks = age_checks + DYNAMIC_OBSTACLE_AGE_CHECKS
+        for check in age_checks:
             age_failures, age_warnings = check_topic_age(check, namespace, args.use_sim_time)
             failures += age_failures
             warnings += age_warnings

@@ -882,6 +882,29 @@ void MpcController::applyGoalStopProtection(
     std::hypot(ref.front().x - r_x, ref.front().y - r_y);
   const bool robot_reached_terminal_ref =
     ref0_dist_for_goal <= std::max(goal_stop_distance_ * 2.0, 0.30);
+  const bool invalid_remote_terminal_hold =
+    reference_distance_valid_ &&
+    reference_total_dist_ <= std::max(goal_stop_distance_ * 0.5, 0.05) &&
+    !robot_reached_terminal_ref;
+  if (invalid_remote_terminal_hold) {
+    if (node) {
+      RCLCPP_ERROR_THROTTLE(
+        node->get_logger(), *clock_, 500,
+        "MPC received invalid terminal hold far from robot; zeroing cmd and forcing replan "
+        "(ref0_dist=%.2f ref_total=%.3f ref_s=%.3f path_s=%.2f path_total=%.2f)",
+        ref0_dist_for_goal, reference_total_dist_, reference_current_s_,
+        current_s_, path_total_dist_);
+    }
+    cmd.twist.linear.x = 0.0;
+    cmd.twist.linear.y = 0.0;
+    last_ux = 0.0;
+    last_uy = 0.0;
+    if (mpc_) {
+      mpc_->setControlAnchorU(0.0, 0.0);
+      mpc_->resetWarmStart();
+    }
+    throw nav2_core::PlannerException("MPC received invalid terminal hold far from robot");
+  }
   if (dist_to_goal_protect < goal_stop_distance_ && robot_reached_terminal_ref) {
     if (node) {
       RCLCPP_WARN_THROTTLE(

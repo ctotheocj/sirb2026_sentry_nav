@@ -36,7 +36,6 @@ private:
     bool have_status{false};
   };
 
-  void diagnosticsCallback(const diagnostic_msgs::msg::DiagnosticArray::SharedPtr msg);
   void diagnosticsCallbackForTopic(
     const std::string & topic,
     const diagnostic_msgs::msg::DiagnosticArray::SharedPtr msg);

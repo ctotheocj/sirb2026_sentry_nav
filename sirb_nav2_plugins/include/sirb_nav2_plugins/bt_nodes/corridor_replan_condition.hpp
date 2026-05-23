@@ -30,9 +30,9 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "tf2_ros/buffer.h"
 
+#include "sentry_nav_interfaces/msg/minco_trajectory.hpp"
 #include "sentry_nav_interfaces/msg/trajectory_status.hpp"
 #include "sentry_nav_interfaces/msg/tracked_obstacle_array.hpp"
-#include "sentry_nav_interfaces/msg/timestamped_path.hpp"
 
 namespace sirb_nav2_plugins
 {
@@ -53,7 +53,7 @@ namespace sirb_nav2_plugins
  *   Input "costmap_topic":           costmap topic for collision check
  *   Input "use_dynamic_obstacles":   enable dynamic obstacle intersection check
  *   Input "dyn_obs_topic":           dynamic obstacles topic, default "/dynamic_obstacles"
- *   Input "timestamped_path_topic":  atomic path+timestamps topic, default "/GridBased/timestamped_path"
+ *   Input "trajectory_topic":        active executable trajectory from TrajectoryManager
  *   Input "trajectory_status_topic": TrajectoryManager status topic, default "trajectory_manager/status"
  *   Input "traj_collision_radius":   collision check radius (m), default 0.5
  *   Input "traj_lookahead_time":     max look-ahead time (s), default 2.0
@@ -87,8 +87,8 @@ public:
         "Enable dynamic obstacle trajectory intersection check"),
       BT::InputPort<std::string>("dyn_obs_topic", "dynamic_obstacles",
         "Dynamic obstacles topic (TrackedObstacleArray)"),
-      BT::InputPort<std::string>("timestamped_path_topic", "GridBased/timestamped_path",
-        "Atomic path+timestamps topic (TimestampedPath)"),
+      BT::InputPort<std::string>("trajectory_topic", "trajectory_manager/trajectory_for_mpc",
+        "Active executable trajectory topic (MincoTrajectory)"),
       BT::InputPort<std::string>("trajectory_status_topic", "trajectory_manager/status",
         "TrajectoryManager status topic"),
       BT::InputPort<double>("trajectory_status_max_age", 1.0,
@@ -154,11 +154,11 @@ private:
   mutable std::mutex dyn_obs_mutex_;
   std::string dyn_obs_topic_;
 
-  // Timestamped path subscription (atomic: path + MINCO timestamps)
-  rclcpp::Subscription<sentry_nav_interfaces::msg::TimestampedPath>::SharedPtr ts_path_sub_;
-  sentry_nav_interfaces::msg::TimestampedPath::SharedPtr latest_ts_path_;
-  mutable std::mutex ts_path_mutex_;
-  std::string ts_path_topic_;
+  // Active trajectory subscription for spatio-temporal dynamic obstacle checks.
+  rclcpp::Subscription<sentry_nav_interfaces::msg::MincoTrajectory>::SharedPtr trajectory_sub_;
+  sentry_nav_interfaces::msg::MincoTrajectory::SharedPtr latest_trajectory_;
+  mutable std::mutex trajectory_mutex_;
+  std::string trajectory_topic_;
 
   // TrajectoryManager status. This distinguishes a blackboard path from an executable MINCO trajectory.
   rclcpp::Subscription<sentry_nav_interfaces::msg::TrajectoryStatus>::SharedPtr trajectory_status_sub_;

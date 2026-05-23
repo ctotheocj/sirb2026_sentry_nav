@@ -45,11 +45,13 @@ def generate_launch_description():
     slam = LaunchConfiguration("slam")
     map_yaml_file = LaunchConfiguration("map")
     prior_pcd_file = LaunchConfiguration("prior_pcd_file")
+    localization_backend = LaunchConfiguration("localization_backend")
     use_sim_time = LaunchConfiguration("use_sim_time")
     params_file = LaunchConfiguration("params_file")
     autostart = LaunchConfiguration("autostart")
     use_composition = LaunchConfiguration("use_composition")
     use_respawn = LaunchConfiguration("use_respawn")
+    require_localization_ready = LaunchConfiguration("require_localization_ready")
     log_level = LaunchConfiguration("log_level")
 
     param_substitutions = {"use_sim_time": use_sim_time, "yaml_filename": map_yaml_file}
@@ -89,6 +91,13 @@ def generate_launch_description():
         "prior_pcd_file", description="Full path to prior PCD file to load"
     )
 
+    declare_localization_backend_cmd = DeclareLaunchArgument(
+        "localization_backend",
+        default_value="point_lio_prior",
+        description="Localization backend: point_lio_prior or ndt",
+        choices=["point_lio_prior", "ndt"],
+    )
+
     declare_use_sim_time_cmd = DeclareLaunchArgument(
         "use_sim_time",
         default_value="false",
@@ -117,6 +126,12 @@ def generate_launch_description():
         "use_respawn",
         default_value="False",
         description="Whether to respawn if a node crashes. Applied when composition is disabled.",
+    )
+
+    declare_require_localization_ready_cmd = DeclareLaunchArgument(
+        "require_localization_ready",
+        default_value="True",
+        description="Keep LocalizationReady localization diagnostics gate in the default BT.",
     )
 
     declare_log_level_cmd = DeclareLaunchArgument(
@@ -162,6 +177,7 @@ def generate_launch_description():
                     "autostart": autostart,
                     "params_file": params_file,
                     "prior_pcd_file": prior_pcd_file,
+                    "localization_backend": localization_backend,
                     "use_composition": use_composition,
                     "use_respawn": use_respawn,
                     "container_name": "nav2_container",
@@ -180,6 +196,7 @@ def generate_launch_description():
                     "use_respawn": use_respawn,
                     "container_name": "nav2_container",
                     "slam": slam,
+                    "require_localization_ready": require_localization_ready,
                 }.items(),
             ),
         ]
@@ -194,11 +211,13 @@ def generate_launch_description():
     ld.add_action(declare_slam_cmd)
     ld.add_action(declare_map_yaml_cmd)
     ld.add_action(declare_prior_pcd_file_cmd)
+    ld.add_action(declare_localization_backend_cmd)
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_params_file_cmd)
     ld.add_action(declare_autostart_cmd)
     ld.add_action(declare_use_composition_cmd)
     ld.add_action(declare_use_respawn_cmd)
+    ld.add_action(declare_require_localization_ready_cmd)
     ld.add_action(declare_log_level_cmd)
     ld.add_action(prepare_navigation_params_cmd)
 

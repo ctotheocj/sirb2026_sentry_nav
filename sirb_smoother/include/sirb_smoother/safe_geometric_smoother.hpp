@@ -67,7 +67,9 @@ private:
     nav_msgs::msg::Path & candidate,
     std::string & diagnostic,
     const Eigen::Vector3d * initial_velocity = nullptr,
-    const Eigen::Vector3d * initial_acceleration = nullptr) const;
+    const Eigen::Vector3d * initial_acceleration = nullptr,
+    const Eigen::Vector3d * terminal_velocity = nullptr,
+    const Eigen::Vector3d * terminal_acceleration = nullptr) const;
 
   bool isPathSafe(
     const nav_msgs::msg::Path & path, const nav2_costmap_2d::Costmap2D & costmap,
@@ -110,6 +112,14 @@ private:
     const geometry_msgs::msg::PoseStamped & a,
     const geometry_msgs::msg::PoseStamped & b, double ratio) const;
   double computePathLength(const nav_msgs::msg::Path & path) const;
+  nav_msgs::msg::Path buildLocalReferenceWindow(
+    const nav_msgs::msg::Path & path,
+    bool & reaches_goal,
+    double & window_length,
+    double & remaining_length) const;
+  Eigen::Vector3d terminalVelocityForWindow(
+    const nav_msgs::msg::Path & path,
+    bool reaches_goal) const;
 
   struct PathMetrics
   {
@@ -149,7 +159,8 @@ private:
     const std_msgs::msg::Header & header) const;
   sentry_nav_interfaces::msg::MincoTrajectory makeMpcTrajectory(
     const MincoOptimizer::Result & result,
-    const std_msgs::msg::Header & header) const;
+    const std_msgs::msg::Header & header,
+    uint64_t goal_id) const;
   sentry_nav_interfaces::msg::MincoTrajectory makeCachedMpcTrajectory(
     const std_msgs::msg::Header & header) const;
   rclcpp_action::GoalResponse handleGenerateGoal(
@@ -182,6 +193,7 @@ private:
   bool do_shortcut_{true};
   bool do_resample_{true};
   bool use_minco_{false};
+  bool minco_optimize_online_{false};
   unsigned char collision_cost_threshold_{253};
   double collision_check_step_{0.05};
   double resample_resolution_{0.20};
@@ -216,17 +228,21 @@ private:
   mutable Eigen::Vector3d cached_initial_acceleration_{Eigen::Vector3d::Zero()};
   mutable Eigen::Vector3d cached_reuse_initial_velocity_{Eigen::Vector3d::Zero()};
   mutable Eigen::Vector3d cached_reuse_initial_acceleration_{Eigen::Vector3d::Zero()};
+  mutable Eigen::Vector3d cached_terminal_velocity_{Eigen::Vector3d::Zero()};
+  mutable Eigen::Vector3d cached_terminal_acceleration_{Eigen::Vector3d::Zero()};
+  mutable bool cached_terminal_stop_{true};
+  mutable uint64_t cached_goal_id_{0};
   mutable Eigen::Vector3d cached_goal_{0, 0, 0};
-  bool enable_stitching_{true};
+  bool enable_stitching_{false};
   double retain_duration_{0.3};
   double stitch_sample_dt_{0.1};
   double stitch_max_distance_{0.5};
   double stitch_cache_timeout_{2.0};
   bool reuse_cached_trajectory_on_minco_failure_{false};
   bool allow_reference_fallback_on_bad_geometry_{false};
-
-  // 仅在获得安全 MINCO 产品时发布给 MPC。
-  bool publish_trajectory_for_mpc_{false};
+  double minco_local_horizon_distance_{6.0};
+  double minco_goal_stop_distance_{0.8};
+  double minco_terminal_pass_speed_{0.0};
 
   bool debug_publish_{true};
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr input_path_pub_;
@@ -236,7 +252,6 @@ private:
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr collision_points_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr metrics_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr dynamic_obs_marker_pub_;
-  rclcpp::Publisher<sentry_nav_interfaces::msg::MincoTrajectory>::SharedPtr mpc_traj_pub_;
   rclcpp_action::Server<GenerateMincoCandidate>::SharedPtr generate_action_server_;
 
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;

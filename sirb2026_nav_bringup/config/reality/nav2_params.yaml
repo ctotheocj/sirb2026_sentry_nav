@@ -33,10 +33,24 @@ point_lio:
       time_diff_lidar_to_imu: 0.0                       # Time offset between LiDAR and IMU calibrated by other algorithms, e.g., LI-Init (find in Readme)
 
     prior_pcd:
-      enable: False
+      enable: True
+      localization_mode: True
       # NOTE: `prior_pcd_map_path` will be provided in the launch file
       # prior_pcd_map_path: ""
-      init_pose: [ 0.0, 0.0, 0.0 ]
+      # Leave empty to require an RViz /initialpose or an explicit start pose in this file.
+      # Values are [x, y, z] or [x, y, z, roll, pitch, yaw] in the CAD-derived map frame.
+      init_pose: []
+      map_frame: "map"
+      init_pose_frame: "base_footprint"
+      state_frame: "front_mid360"
+      map_gravity: [0.0, 0.0, -9.81]
+      leaf_size: 0.12
+      map_update_frame: -1
+
+    diagnostics:
+      trust_frames: 10
+      min_effective_features: 80
+      min_effective_ratio: 0.08
 
     preprocess:
       lidar_type: 1                                     # 1 for Livox serials LiDAR, 2 for Velodyne LiDAR, 3 for ouster LiDAR
@@ -312,51 +326,16 @@ bt_navigator:
     plugin_lib_names:
       - nav2_compute_path_to_pose_action_bt_node
       - nav2_compute_path_through_poses_action_bt_node
-      - nav2_smooth_path_action_bt_node
       - nav2_follow_path_action_bt_node
-      - nav2_spin_action_bt_node
       - nav2_wait_action_bt_node
-      - nav2_assisted_teleop_action_bt_node
       - nav2_back_up_action_bt_node
-      - nav2_drive_on_heading_bt_node
       - nav2_clear_costmap_service_bt_node
-      - nav2_is_stuck_condition_bt_node
-      - nav2_goal_reached_condition_bt_node
       - nav2_goal_updated_condition_bt_node
-      - nav2_globally_updated_goal_condition_bt_node
-      - nav2_is_path_valid_condition_bt_node
-      - nav2_initial_pose_received_condition_bt_node
-      - nav2_reinitialize_global_localization_service_bt_node
       - nav2_rate_controller_bt_node
-      - nav2_distance_controller_bt_node
-      - nav2_speed_controller_bt_node
-      - nav2_truncate_path_action_bt_node
-      - nav2_truncate_path_local_action_bt_node
-      - nav2_goal_updater_node_bt_node
       - nav2_recovery_node_bt_node
       - nav2_pipeline_sequence_bt_node
       - nav2_round_robin_node_bt_node
-      - nav2_transform_available_condition_bt_node
-      - nav2_time_expired_condition_bt_node
-      - nav2_path_expiring_timer_condition
-      - nav2_distance_traveled_condition_bt_node
-      - nav2_single_trigger_bt_node
-      - nav2_goal_updated_controller_bt_node
-      - nav2_is_battery_low_condition_bt_node
-      - nav2_navigate_through_poses_action_bt_node
-      - nav2_navigate_to_pose_action_bt_node
       - nav2_remove_passed_goals_action_bt_node
-      - nav2_planner_selector_bt_node
-      - nav2_controller_selector_bt_node
-      - nav2_goal_checker_selector_bt_node
-      - nav2_controller_cancel_bt_node
-      - nav2_path_longer_on_approach_bt_node
-      - nav2_wait_cancel_bt_node
-      - nav2_spin_cancel_bt_node
-      - nav2_back_up_cancel_bt_node
-      - nav2_assisted_teleop_cancel_bt_node
-      - nav2_drive_on_heading_cancel_bt_node
-      - nav2_is_battery_charging_condition_bt_node
       - sirb_nav2_plugins_nodes
 
 controller_server:
@@ -402,7 +381,7 @@ controller_server:
       reverse_guard_allowance: 0.03
       collision_stop_failure_sec: 1.0
       allow_obstacle_retry_without_constraints: false
-      allow_speed_limit_retry_without_limits: true
+      allow_speed_limit_retry_without_limits: false
       navigation_mode_topic: "navigation_mode_manager/mode"
       minco_traj_topic: "trajectory_manager/trajectory_for_mpc"
       QX: 60.0      #10~100，下同
@@ -579,55 +558,34 @@ smoother_server:
       use_minco: true
       use_footprint_collision_check: false
       allow_unknown: true
-      # ESDF (requires plan_env grid_map_node running)
-      minco_use_esdf: true
-      minco_esdf_safe_distance: 0.12
-      minco_esdf_influence_distance: 0.45
-      minco_esdf_query_z: 0.3
+      # Online navigation generates a time-parameterized executable reference.
+      # Heavy LBFGS/ESDF optimization is intentionally kept out of the BT tick path.
+      minco_optimize_online: false
       # Kinematics
       minco_v_ref: 1.8
       minco_v_max: 2.2
       minco_a_max: 3.4
-      minco_w_velocity: 1.0
-      minco_w_acceleration: 0.5
       minco_dynamics_sample_dt: 0.08
       minco_dynamic_realloc_max_segment_scale: 8.0
       min_clearance_for_removal: 0.12
       minco_min_segment_time: 0.10
       minco_max_segment_time: 4.0
-      minco_max_pieces: 60
+      minco_sample_resolution: 0.18
+      minco_waypoint_time_step: 0.55
+      minco_min_waypoint_spacing: 0.25
+      minco_max_waypoints: 16
+      minco_max_pieces: 32
+      minco_local_horizon_distance: 6.0
+      minco_goal_stop_distance: 0.8
+      minco_terminal_pass_speed: 1.8
       minco_guide_fillet_enabled: true
       minco_guide_fillet_radius: 0.35
       minco_guide_fillet_min_angle: 0.25
-      # Three-stage pipeline
-      minco_phase0_enabled: true
-      minco_phase0_max_iterations: 15
-      minco_phase0_w_energy: 1.0
-      minco_phase0_w_reference: 10.0
-      minco_phase0_w_obstacle: 0.1
-      minco_pre_max_iterations: 30
-      minco_pre_w_energy: 0.5
-      minco_pre_w_reference: 20.0
-      minco_pre_w_obstacle: 1.0
-      minco_fine_max_iterations: 60
-      minco_fine_w_energy: 3.0       # higher for omnidirectional (no curvature constraint)
-      minco_fine_w_reference: 5.0
-      minco_fine_w_obstacle: 1.2
-      minco_wei_time: 15.0
       # Time allocation
       minco_use_trapezoidal_time: true
       minco_trapezoidal_k_angle: 0.3
-      minco_w_time_ratio: 5.0
-      minco_time_ratio_upper: 1.3
-      minco_time_ratio_lower: 0.7
-      # Trajectory stitching
-      enable_trajectory_stitching: false
-      retain_duration: 0.3
-      stitch_max_distance: 0.5
       reuse_cached_trajectory_on_minco_failure: false
       allow_reference_fallback_on_bad_geometry: true
-      # MPC output
-      publish_trajectory_for_mpc: false
       dynamic_obstacle_enabled: false
       dynamic_obstacle_topic: dynamic_obstacles
       debug_publish: true
@@ -635,7 +593,6 @@ smoother_server:
 trajectory_manager:
   ros__parameters:
     use_sim_time: False
-    input_topic: "safe_geometric_smoother/legacy_trajectory_for_mpc"
     output_topic: "trajectory_manager/trajectory_for_mpc"
     odom_topic: "odometry"
     costmap_topic: "local_costmap/costmap_raw"
@@ -656,6 +613,7 @@ trajectory_manager:
     collision_check_radius: 0.12
     emergency_stop_remaining_time_sec: 0.10
     emergency_stop_duration_sec: 0.20
+    terminal_arrival_distance: 0.35
     switch_goal_change_distance: 0.5
     switch_max_position_error: 0.70
     switch_max_velocity_error: 2.2
@@ -677,27 +635,18 @@ behavior_server:
     local_footprint_topic: local_costmap/published_footprint
     global_footprint_topic: global_costmap/published_footprint
     cycle_frequency: 10.0
-    behavior_plugins: ["spin", "backup", "drive_on_heading", "assisted_teleop", "wait"]
-    spin:
-      plugin: "nav2_behaviors/Spin"
+    behavior_plugins: ["backup", "wait"]
     backup:
       plugin: "pb_nav2_behaviors/BackUpFreeSpace"
       allow_escape_from_collision: true
       escape_collision_max_distance: 0.45
-    drive_on_heading:
-      plugin: "nav2_behaviors/DriveOnHeading"
     wait:
       plugin: "nav2_behaviors/Wait"
-    assisted_teleop:
-      plugin: "nav2_behaviors/AssistedTeleop"
     local_frame: odom
     global_frame: map
     robot_base_frame: gimbal_yaw_fake
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0
-    max_rotational_vel: 1.0
-    min_rotational_vel: 0.4
-    rotational_acc_lim: 3.2
     # params for pb_nav2_behaviors/BackUpFreeSpace
     service_name: "global_costmap/get_costmap"
     robot_radius: 0.3

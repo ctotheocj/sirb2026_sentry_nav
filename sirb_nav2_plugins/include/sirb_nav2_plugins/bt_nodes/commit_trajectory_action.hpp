@@ -34,9 +34,14 @@ public:
         BT::InputPort<bool>(
           "allow_keep_active_on_reject", true,
           "Return success when commit is rejected but the old active trajectory remains valid"),
-        BT::InputPort<bool>(
-          "prefer_keep_active", false,
-          "Keep current active trajectory when the candidate is a degraded fallback"),
+	        BT::InputPort<bool>(
+	          "prefer_keep_active", false,
+	          "Keep current active trajectory only when the candidate is a degraded fallback"),
+        BT::InputPort<std::string>(
+          "product_type", "unknown", "Candidate trajectory product type"),
+	        BT::InputPort<bool>(
+	          "degraded_candidate", false,
+	          "True for collision/geometry/cache fallback; false for normal time_reference"),
         BT::OutputPort<nav_msgs::msg::Path>("tracking_path", "Committed path for FollowPath"),
         BT::OutputPort<bool>("accepted", "True when the candidate trajectory was committed"),
         BT::OutputPort<bool>("active_valid", "True when trajectory manager still has an active trajectory"),

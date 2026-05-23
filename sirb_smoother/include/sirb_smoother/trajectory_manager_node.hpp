@@ -39,7 +39,6 @@ private:
     EMERGENCY_STOP,
   };
 
-  void trajectoryCallback(const sentry_nav_interfaces::msg::MincoTrajectory::SharedPtr msg);
   rclcpp_action::GoalResponse handleCommitGoal(
     const rclcpp_action::GoalUUID & uuid,
     std::shared_ptr<const CommitTrajectory::Goal> goal);
@@ -53,7 +52,12 @@ private:
   void publishStatus(const rclcpp::Time & stamp, const char * reason);
   void publishEmergencyStop(const rclcpp::Time & stamp, const char * reason);
   void publishLastEmergencyStop(const rclcpp::Time & stamp);
-  void acceptTrajectory(
+  bool buildEmergencyStopTrajectory(
+    const rclcpp::Time & stamp,
+    const char * reason,
+    sentry_nav_interfaces::msg::MincoTrajectory & stop,
+    std::string & stop_source);
+  bool acceptTrajectory(
     const sentry_nav_interfaces::msg::MincoTrajectory & msg,
     double projected_time,
     State next_state,
@@ -64,11 +68,21 @@ private:
     const sentry_nav_interfaces::msg::MincoTrajectory & candidate_msg,
     double & candidate_projected_time,
     bool & connect_from_active);
+  bool activeTrajectoryHealthyForKeep(
+    double & projected_time,
+    double & remaining,
+    std::string & reason);
+  bool candidateExecutableFromOdom(
+    const sentry_nav_interfaces::msg::MincoTrajectory & candidate_msg,
+    double & candidate_projected_time,
+    std::string & reason);
   void publishActiveTrajectory(const rclcpp::Time & stamp);
   void clearActiveTrajectory(const char * reason);
+  void completeActiveTrajectory(const char * reason);
   void transitionTo(State next, const char * reason);
   const char * stateName(State state) const;
   bool validateTrajectory(const sentry_nav_interfaces::msg::MincoTrajectory & msg) const;
+  bool activeTrajectoryTerminalReached(double & terminal_distance);
   double trajectoryDuration(const sentry_nav_interfaces::msg::MincoTrajectory & msg) const;
   double endpointDistance(
     const sentry_nav_interfaces::msg::MincoTrajectory & a,
@@ -114,13 +128,11 @@ private:
   bool worldToCostmap(double wx, double wy, unsigned int & mx, unsigned int & my) const;
   bool isNewGoal(const sentry_nav_interfaces::msg::MincoTrajectory & msg) const;
 
-  rclcpp::Subscription<sentry_nav_interfaces::msg::MincoTrajectory>::SharedPtr traj_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<nav2_msgs::msg::Costmap>::SharedPtr costmap_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr navigation_mode_sub_;
   rclcpp::Publisher<sentry_nav_interfaces::msg::MincoTrajectory>::SharedPtr traj_pub_;
   rclcpp::Publisher<sentry_nav_interfaces::msg::TrajectoryStatus>::SharedPtr status_pub_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_text_pub_;
   rclcpp_action::Server<CommitTrajectory>::SharedPtr commit_action_server_;
   rclcpp::TimerBase::SharedPtr publish_timer_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
@@ -146,7 +158,6 @@ private:
   bool publish_full_active_trajectory_{true};
   std::string last_transition_reason_{"init"};
 
-  std::string input_topic_{"safe_geometric_smoother/trajectory_for_mpc"};
   std::string output_topic_{"trajectory_manager/trajectory_for_mpc"};
   std::string odom_topic_{"odometry"};
   std::string costmap_topic_{"local_costmap/costmap_raw"};
@@ -170,6 +181,7 @@ private:
   double switch_allow_when_remaining_sec_{1.0};
   double emergency_stop_remaining_time_sec_{0.10};
   double emergency_stop_duration_sec_{0.20};
+  double terminal_arrival_distance_{0.35};
   bool enable_forward_collision_check_{true};
   bool allow_unknown_costmap_{true};
   int collision_cost_threshold_{253};

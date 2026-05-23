@@ -29,6 +29,31 @@ sys.path.append(os.path.dirname(__file__))
 from motion_profile_utils import prepare_motion_profile_params
 
 
+def _as_bool(value):
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _validate_reality_assets(context, map_config, prior_pcd_config, slam_config):
+    if _as_bool(context.perform_substitution(slam_config)):
+        return []
+
+    map_path = context.perform_substitution(map_config)
+    prior_pcd_path = context.perform_substitution(prior_pcd_config)
+    missing = []
+    if not os.path.isfile(map_path):
+        missing.append(f"map={map_path}")
+    if not os.path.isfile(prior_pcd_path):
+        missing.append(f"prior_pcd_file={prior_pcd_path}")
+    if missing:
+        raise RuntimeError(
+            "Reality non-SLAM navigation requires existing prior map assets. "
+            "Pass valid 'map:=...' and 'prior_pcd_file:=...' or launch with slam:=True. "
+            "Missing: " + ", ".join(missing))
+    return []
+
+
 def generate_launch_description():
     launch_file = os.path.abspath(__file__)
     if "/install/" in launch_file:
@@ -46,6 +71,7 @@ def generate_launch_description():
     world                 = LaunchConfiguration("world")
     map_yaml_file         = LaunchConfiguration("map")
     prior_pcd_file        = LaunchConfiguration("prior_pcd_file")
+    localization_backend  = LaunchConfiguration("localization_backend")
     use_sim_time          = LaunchConfiguration("use_sim_time")
     params_file           = LaunchConfiguration("params_file")
     autostart             = LaunchConfiguration("autostart")
@@ -55,6 +81,8 @@ def generate_launch_description():
     use_robot_state_pub   = LaunchConfiguration("use_robot_state_pub")
     use_rviz              = LaunchConfiguration("use_rviz")
     use_yaw_fusion        = LaunchConfiguration("use_yaw_fusion")
+    use_dodge_manager     = LaunchConfiguration("use_dodge_manager")
+    require_localization_ready = LaunchConfiguration("require_localization_ready")
     use_dynamic_obstacles = LaunchConfiguration("use_dynamic_obstacles")
 
     declare_namespace_cmd = DeclareLaunchArgument(
@@ -100,6 +128,16 @@ def generate_launch_description():
             TextSubstitution(text=".pcd"),
         ],
         description="Full path to the prior point-cloud file used by relocalization",
+    )
+
+    declare_localization_backend_cmd = DeclareLaunchArgument(
+        "localization_backend",
+        default_value="point_lio_prior",
+        description=(
+            "Localization backend. Use point_lio_prior for prior-map Point-LIO localization; "
+            "use ndt for the legacy NDT map->odom correction fallback."
+        ),
+        choices=["point_lio_prior", "ndt"],
     )
 
     declare_use_sim_time_cmd = DeclareLaunchArgument(
@@ -161,6 +199,21 @@ def generate_launch_description():
         ),
     )
 
+    declare_use_dodge_manager_cmd = DeclareLaunchArgument(
+        "use_dodge_manager",
+        default_value="False",
+        description=(
+            "Launch dodge_manager and enable direct dodge cmd_vel output. "
+            "Keep False for the normal Nav2/MPC command chain."
+        ),
+    )
+
+    declare_require_localization_ready_cmd = DeclareLaunchArgument(
+        "require_localization_ready",
+        default_value="True",
+        description="Keep the LocalizationReady diagnostics gate in the default BT.",
+    )
+
     declare_use_dynamic_obstacles_cmd = DeclareLaunchArgument(
         "use_dynamic_obstacles",
         default_value="False",
@@ -174,6 +227,10 @@ def generate_launch_description():
         function=lambda context, *_: prepare_motion_profile_params(
             context, params_file, "reality", map_yaml_file,
             use_dynamic_obstacles, use_yaw_fusion))
+
+    validate_reality_assets_cmd = OpaqueFunction(
+        function=lambda context, *_: _validate_reality_assets(
+            context, map_yaml_file, prior_pcd_file, slam))
 
     configured_params = ParameterFile(
         RewrittenYaml(
@@ -214,9 +271,11 @@ def generate_launch_description():
             "prior_pcd_file":        prior_pcd_file,
             "use_sim_time":          use_sim_time,
             "params_file":           params_file,
+            "localization_backend":  localization_backend,
             "autostart":             autostart,
             "use_composition":       use_composition,
             "use_respawn":           use_respawn,
+            "require_localization_ready": require_localization_ready,
         }.items(),
     )
 
@@ -236,7 +295,8 @@ def generate_launch_description():
         name="dodge_manager",
         namespace=namespace,
         output="screen",
-        parameters=[configured_params],
+        condition=IfCondition(use_dodge_manager),
+        parameters=[configured_params, {"enable_dodge": use_dodge_manager}],
         remappings=[("/tf", "tf"), ("/tf_static", "tf_static")],
     )
 
@@ -269,21 +329,6 @@ def generate_launch_description():
         parameters=[configured_params],
     )
 
-    def _make_grid_map_node(context, *_):
-        if context.launch_configurations.get("use_composition", "False").lower() == "true":
-            return []
-        ns_val = context.launch_configurations["namespace"]
-        return [Node(
-            package="plan_env",
-            executable="grid_map_node",
-            name="grid_map_node",
-            namespace=ns_val,
-            output="screen",
-            parameters=[configured_params],
-        )]
-
-    start_grid_map_node_cmd = OpaqueFunction(function=_make_grid_map_node)
-
     joy_teleop_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(launch_dir, "joy_teleop_launch.py")),
         launch_arguments={
@@ -310,6 +355,7 @@ def generate_launch_description():
     ld.add_action(declare_world_cmd)
     ld.add_action(declare_map_yaml_cmd)
     ld.add_action(declare_prior_pcd_file_cmd)
+    ld.add_action(declare_localization_backend_cmd)
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_params_file_cmd)
     ld.add_action(declare_autostart_cmd)
@@ -319,14 +365,16 @@ def generate_launch_description():
     ld.add_action(declare_rviz_config_file_cmd)
     ld.add_action(declare_use_rviz_cmd)
     ld.add_action(declare_use_yaw_fusion_cmd)
+    ld.add_action(declare_use_dodge_manager_cmd)
+    ld.add_action(declare_require_localization_ready_cmd)
     ld.add_action(declare_use_dynamic_obstacles_cmd)
+    ld.add_action(validate_reality_assets_cmd)
     ld.add_action(prepare_motion_profile_cmd)
 
     ld.add_action(start_robot_state_publisher_cmd)
     ld.add_action(start_livox_ros_driver2_node)
     ld.add_action(start_lidar_preprocessor_node)
     ld.add_action(start_dynamic_point_detector_node)
-    ld.add_action(start_grid_map_node_cmd)
     ld.add_action(bringup_cmd)
     ld.add_action(start_yaw_fusion_node)
     ld.add_action(start_dodge_manager_node)

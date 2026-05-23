@@ -7,6 +7,8 @@ nav_msgs/Path smoothed_path
 sentry_nav_interfaces/MincoTrajectory candidate_minco
 string reason
 string product_type
+# True only for degraded products such as collision/geometry/cache fallback. The normal
+# online product is time_reference, which is an executable time-parameterized trajectory.
 bool prefer_keep_active
 builtin_interfaces/Duration smoothing_duration
 ---

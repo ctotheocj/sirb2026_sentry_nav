@@ -54,14 +54,21 @@ void CommitTrajectoryAction::on_tick()
   bool prefer_keep_active = false;
   getInput("prefer_keep_active", prefer_keep_active);
   goal_.prefer_keep_active = prefer_keep_active;
+  std::string product_type = "unknown";
+  getInput("product_type", product_type);
+  goal_.product_type = product_type;
+  bool degraded_candidate = false;
+  getInput("degraded_candidate", degraded_candidate);
+  goal_.degraded_candidate = degraded_candidate;
 
   RCLCPP_INFO(
     node_->get_logger(),
     "CommitTrajectory: tick path_poses=%zu frame='%s' minco_waypoints=%zu minco_segments=%zu "
-    "allow_keep_active_on_reject=%d prefer_keep_active=%d",
+    "allow_keep_active_on_reject=%d prefer_keep_active=%d degraded=%d product='%s'",
     candidate_path_.poses.size(), candidate_path_.header.frame_id.c_str(),
     goal_.candidate_minco.waypoints.size(), goal_.candidate_minco.segment_times.size(),
-    goal_.allow_keep_active_on_reject, goal_.prefer_keep_active);
+    goal_.allow_keep_active_on_reject, goal_.prefer_keep_active,
+    goal_.degraded_candidate, goal_.product_type.c_str());
 }
 
 BT::NodeStatus CommitTrajectoryAction::on_success()

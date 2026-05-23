@@ -20,6 +20,7 @@ install(PROGRAMS
   scripts/tf_jump_monitor.py
   scripts/apply_motion_profile.py
   scripts/check_navigation_chain.py
+  scripts/pcd_to_nav2_map.py
   scripts/visualize_hole_regions.py
   DESTINATION lib/${PROJECT_NAME}
 )

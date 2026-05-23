@@ -31,7 +31,10 @@ bool MpcController::buildTrajFromMsg(
     msg.initial_velocity.x, msg.initial_velocity.y, msg.initial_velocity.z);
   head.col(2) = Eigen::Vector3d(
     msg.initial_acceleration.x, msg.initial_acceleration.y, msg.initial_acceleration.z);
-  // tail velocity = zero (robot stops at goal)
+  tail.col(1) = Eigen::Vector3d(
+    msg.terminal_velocity.x, msg.terminal_velocity.y, msg.terminal_velocity.z);
+  tail.col(2) = Eigen::Vector3d(
+    msg.terminal_acceleration.x, msg.terminal_acceleration.y, msg.terminal_acceleration.z);
 
   Eigen::Matrix3Xd inner(3, std::max(0, M - 1));
   for (int i = 1; i < M; ++i) inner.col(i - 1) = pts[i];

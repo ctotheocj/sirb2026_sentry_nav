@@ -16,7 +16,6 @@ find_package(action_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/TrackedObstacle.msg"
   "msg/TrackedObstacleArray.msg"
-  "msg/TimestampedPath.msg"
   "msg/MincoTrajectory.msg"
   "msg/TrajectoryStatus.msg"
   "msg/HolePassCmd.msg"

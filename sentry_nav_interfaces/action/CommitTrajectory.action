@@ -1,6 +1,10 @@
 sentry_nav_interfaces/MincoTrajectory candidate_minco
 bool allow_keep_active_on_reject
+# Normal executable products such as time_reference and optimized_minco are not degraded.
+# Fallback products set prefer_keep_active/degraded_candidate so a healthy active trajectory wins.
 bool prefer_keep_active
+string product_type
+bool degraded_candidate
 ---
 bool accepted
 bool active_valid

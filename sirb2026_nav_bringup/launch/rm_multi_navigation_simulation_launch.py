@@ -46,6 +46,7 @@ def generate_launch_description():
 
     map_yaml_file = LaunchConfiguration("map")
     prior_pcd_file = LaunchConfiguration("prior_pcd_file")
+    localization_backend = LaunchConfiguration("localization_backend")
     params_file = LaunchConfiguration("params_file")
     autostart = LaunchConfiguration("autostart")
     rviz_config_file = LaunchConfiguration("rviz_config")
@@ -78,6 +79,12 @@ def generate_launch_description():
             TextSubstitution(text=".pcd"),
         ],
         description="Full path to prior PCD file to load",
+    )
+    declare_localization_backend_cmd = DeclareLaunchArgument(
+        "localization_backend",
+        default_value="ndt",
+        description="Localization backend: ndt or point_lio_prior",
+        choices=["point_lio_prior", "ndt"],
     )
     declare_params_file_cmd = DeclareLaunchArgument(
         "params_file",
@@ -136,6 +143,7 @@ def generate_launch_description():
                         "world": world,
                         "map": map_yaml_file,
                         "prior_pcd_file": prior_pcd_file,
+                        "localization_backend": localization_backend,
                         "use_sim_time": "True",
                         "params_file": params_file,
                         "autostart": autostart,
@@ -152,6 +160,7 @@ def generate_launch_description():
     ld.add_action(declare_world_cmd)
     ld.add_action(declare_map_yaml_cmd)
     ld.add_action(declare_prior_pcd_file_cmd)
+    ld.add_action(declare_localization_backend_cmd)
     ld.add_action(declare_params_file_cmd)
     ld.add_action(declare_use_rviz_cmd)
     ld.add_action(declare_autostart_cmd)

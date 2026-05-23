@@ -104,10 +104,45 @@ def apply_profile(data):
     set_if_changed(
         smoother,
         "minco_max_pieces",
-        max(int(smoother.get("minco_max_pieces", 60)), 60),
+        int(smoother.get("minco_max_pieces", 32)),
         changes,
     )
-    set_if_changed(smoother, "enable_trajectory_stitching", False, changes)
+    set_if_changed(
+        smoother,
+        "minco_max_waypoints",
+        int(smoother.get("minco_max_waypoints", 16)),
+        changes,
+    )
+    set_if_changed(
+        smoother,
+        "minco_waypoint_time_step",
+        float(smoother.get("minco_waypoint_time_step", 0.55)),
+        changes,
+    )
+    set_if_changed(
+        smoother,
+        "minco_min_waypoint_spacing",
+        float(smoother.get("minco_min_waypoint_spacing", 0.25)),
+        changes,
+    )
+    set_if_changed(
+        smoother,
+        "minco_local_horizon_distance",
+        float(smoother.get("minco_local_horizon_distance", 6.0)),
+        changes,
+    )
+    set_if_changed(
+        smoother,
+        "minco_goal_stop_distance",
+        float(smoother.get("minco_goal_stop_distance", 0.8)),
+        changes,
+    )
+    set_if_changed(
+        smoother,
+        "minco_terminal_pass_speed",
+        float(smoother.get("minco_terminal_pass_speed", values["minco_v_ref"])),
+        changes,
+    )
     set_if_changed(smoother, "reuse_cached_trajectory_on_minco_failure", False, changes)
 
     set_if_changed(manager, "publish_full_active_trajectory", True, changes)

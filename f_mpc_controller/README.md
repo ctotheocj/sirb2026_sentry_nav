@@ -15,14 +15,20 @@ BT ComputePath* -> SafeGeometricSmoother GenerateMincoCandidate
 ```
 
 `FollowPath` still receives a Nav2 path from the behavior tree. The controller uses that
-path as the global path and as a fallback reference, but the normal high-quality tracking
-branch is the active `sentry_nav_interfaces/msg/MincoTrajectory` from
-`trajectory_manager/trajectory_for_mpc`.
+path for geometric progress and debug preview. Normal motion control requires the active
+`sentry_nav_interfaces/msg/MincoTrajectory` from `trajectory_manager/trajectory_for_mpc`;
+the default configuration does not track a path-only fallback as an executable trajectory.
+The online candidate product is `time_reference`: a rolling local MINCO polynomial built
+from the Nav2 path, current odometry velocity, and boundary speed constraints. Heavy
+LBFGS/ESDF trajectory optimization is optional (`minco_optimize_online=true`) and is not in
+the default BT tick path. The terminal boundary is pass-through velocity until the window
+reaches the final goal, where it becomes a stop boundary.
 
 ## Runtime Behavior
 
 - Samples the active MINCO trajectory in the controller global frame.
-- Falls back to the Nav2 path only when `allow_path_fallback_without_minco` permits it.
+- Uses the Nav2 path as zero-speed preview while waiting for MINCO when
+  `allow_path_fallback_without_minco=false`.
 - Stops and eventually fails `FollowPath` when no executable MINCO is available for longer
   than `minco_unavailable_failure_sec`.
 - Scales both MINCO reference time and reference velocity when lateral tracking error grows,
@@ -62,7 +68,7 @@ These are the parameters actually declared by the current implementation under
 | `minco_traj_topic` | Active MINCO trajectory topic, normally `trajectory_manager/trajectory_for_mpc` |
 | `minco_timeout_sec` | Time-window grace for active MINCO execution |
 | `minco_unavailable_failure_sec` | Max wait before failing `FollowPath` when MINCO is unavailable |
-| `allow_path_fallback_without_minco` | Allow path-only reference tracking while waiting for MINCO |
+| `allow_path_fallback_without_minco` | Allow path-only reference tracking; default bringup keeps this false |
 | `minco_projection_*` | Projection search window and lag/advance limits on the active trajectory |
 | `enable_lateral_error_ref_scaling` | Reduce reference progression when lateral tracking error grows |
 | `lateral_error_slow_threshold`, `lateral_error_high_threshold` | Error band that maps to reference time scaling |
@@ -79,9 +85,8 @@ The default safety policy keeps both retry switches false: infeasible hard obsta
 per-horizon speed constraints cause a stop/recovery path instead of silently removing the
 constraint that made the problem safe.
 
-The old `vx_max`, `vy_max`, `adaptive_step_*`, `enable_trapezoidal_accel`, `trap_*`,
-`enable_velocity_reference`, and `TimestampedPath` parameters are not part of the current
-controller path.
+The old `vx_max`, `vy_max`, `adaptive_step_*`, `enable_trapezoidal_accel`, `trap_*`, and
+`enable_velocity_reference` parameters are not part of the current controller path.
 
 ## Topics
 
@@ -92,10 +97,9 @@ controller path.
 | `dynamic_obstacles` | `sentry_nav_interfaces/msg/TrackedObstacleArray` | subscribe | Only when dynamic obstacle avoidance is enabled |
 | `local_plan` | `nav_msgs/msg/Path` | publish | Reference preview for RViz/debugging |
 
-`trajectory_manager.input_topic` may still be configured to
-`safe_geometric_smoother/legacy_trajectory_for_mpc` for compatibility, but the current
-normal chain commits candidate MINCO trajectories through the `CommitTrajectory` action and
-publishes the active trajectory on `trajectory_manager/trajectory_for_mpc`.
+There is no direct smoother-to-MPC trajectory topic in the default chain. Candidate MINCO
+trajectories must be committed through the `CommitTrajectory` action so `TrajectoryManager`
+can own continuity checks, emergency hold, status publication, and active-trajectory timing.
 
 ## Build
 

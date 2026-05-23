@@ -9,6 +9,7 @@
 #include "sirb_nav2_plugins/bt_nodes/corridor_replan_condition.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 
@@ -24,6 +25,136 @@ double yawFromQuaternion(const geometry_msgs::msg::Quaternion & q)
   const double siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
   const double cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
   return std::atan2(siny_cosp, cosy_cosp);
+}
+
+bool trajectoryPositionAtTime(
+  const sentry_nav_interfaces::msg::MincoTrajectory & trajectory,
+  double target_time,
+  double & px,
+  double & py)
+{
+  if (trajectory.waypoints.empty()) {
+    return false;
+  }
+
+  if (trajectory.waypoints.size() == 1 || trajectory.segment_times.empty() || target_time <= 0.0) {
+    px = trajectory.waypoints.front().x;
+    py = trajectory.waypoints.front().y;
+    return true;
+  }
+
+  double accumulated_time = 0.0;
+  const size_t segments = std::min(trajectory.segment_times.size(), trajectory.waypoints.size() - 1);
+  for (size_t i = 0; i < segments; ++i) {
+    const auto & a = trajectory.waypoints[i];
+    const auto & b = trajectory.waypoints[i + 1];
+    const double dx = b.x - a.x;
+    const double dy = b.y - a.y;
+    const double segment_time = std::max(0.0, trajectory.segment_times[i]);
+
+    if (segment_time <= 1.0e-6) {
+      accumulated_time += segment_time;
+      continue;
+    }
+
+    if (accumulated_time + segment_time >= target_time) {
+      const double ratio = std::clamp(
+        (target_time - accumulated_time) / segment_time, 0.0, 1.0);
+      px = a.x + dx * ratio;
+      py = a.y + dy * ratio;
+      return true;
+    }
+
+    accumulated_time += segment_time;
+  }
+
+  const auto & last = trajectory.waypoints.back();
+  px = last.x;
+  py = last.y;
+  return true;
+}
+
+double trajectoryDuration(const sentry_nav_interfaces::msg::MincoTrajectory & trajectory)
+{
+  double duration = 0.0;
+  const size_t segments = std::min(trajectory.segment_times.size(), trajectory.waypoints.size() - 1);
+  for (size_t i = 0; i < segments; ++i) {
+    duration += std::max(0.0, trajectory.segment_times[i]);
+  }
+  return duration;
+}
+
+double closestTrajectoryTime(
+  const sentry_nav_interfaces::msg::MincoTrajectory & trajectory,
+  double robot_x,
+  double robot_y)
+{
+  if (trajectory.waypoints.size() < 2 || trajectory.segment_times.empty()) {
+    return 0.0;
+  }
+
+  double best_time = 0.0;
+  double accumulated_time = 0.0;
+  double best_dist_sq = std::numeric_limits<double>::max();
+  const size_t segments = std::min(trajectory.segment_times.size(), trajectory.waypoints.size() - 1);
+  for (size_t i = 0; i < segments; ++i) {
+    const auto & a = trajectory.waypoints[i];
+    const auto & b = trajectory.waypoints[i + 1];
+    const double dx = b.x - a.x;
+    const double dy = b.y - a.y;
+    const double len_sq = dx * dx + dy * dy;
+    double ratio = 0.0;
+    if (len_sq > 1.0e-12) {
+      ratio = std::clamp(((robot_x - a.x) * dx + (robot_y - a.y) * dy) / len_sq, 0.0, 1.0);
+    }
+    const double px = a.x + dx * ratio;
+    const double py = a.y + dy * ratio;
+    const double dist_sq = (robot_x - px) * (robot_x - px) + (robot_y - py) * (robot_y - py);
+    if (dist_sq < best_dist_sq) {
+      best_dist_sq = dist_sq;
+      best_time = accumulated_time + std::max(0.0, trajectory.segment_times[i]) * ratio;
+    }
+    accumulated_time += std::max(0.0, trajectory.segment_times[i]);
+  }
+  return best_time;
+}
+
+std::array<double, 2> obstaclePositionAtTime(
+  const sentry_nav_interfaces::msg::TrackedObstacle & obs,
+  double t)
+{
+  const double pred_dt = std::max(static_cast<double>(obs.prediction_dt), 1.0e-3);
+  if (t <= 1.0e-6) {
+    return {obs.x, obs.y};
+  }
+  if (obs.predicted_positions.empty()) {
+    return {obs.x + obs.vx * t, obs.y + obs.vy * t};
+  }
+
+  const double scaled = t / pred_dt;
+  const auto & first = obs.predicted_positions.front();
+  if (scaled <= 1.0) {
+    return {
+      (1.0 - scaled) * obs.x + scaled * first.x,
+      (1.0 - scaled) * obs.y + scaled * first.y};
+  }
+
+  const int last_idx = static_cast<int>(obs.predicted_positions.size()) - 1;
+  if (scaled >= static_cast<double>(last_idx + 1)) {
+    const auto & last = obs.predicted_positions.back();
+    const double last_time = static_cast<double>(last_idx + 1) * pred_dt;
+    return {last.x + obs.vx * (t - last_time), last.y + obs.vy * (t - last_time)};
+  }
+
+  const double idx_f = scaled - 1.0;
+  const int idx_lo = std::clamp(static_cast<int>(std::floor(idx_f)), 0, last_idx);
+  const int idx_hi = std::clamp(idx_lo + 1, 0, last_idx);
+  const double alpha = std::clamp(idx_f - std::floor(idx_f), 0.0, 1.0);
+  const auto & lo = obs.predicted_positions[static_cast<size_t>(idx_lo)];
+  const auto & hi = obs.predicted_positions[static_cast<size_t>(idx_hi)];
+  return {
+    (1.0 - alpha) * lo.x + alpha * hi.x,
+    (1.0 - alpha) * lo.y + alpha * hi.y};
 }
 }  // namespace
 
@@ -54,7 +185,7 @@ BT::NodeStatus ReplanCondition::tick()
   std::string global_frame = "map";
   std::string robot_frame = "base_footprint";
   std::string dyn_obs_topic = "dynamic_obstacles";
-  std::string ts_path_topic = "GridBased/timestamped_path";
+  std::string trajectory_topic = "trajectory_manager/trajectory_for_mpc";
   std::string trajectory_status_topic = "trajectory_manager/status";
   double trajectory_status_max_age = 1.0;
   double traj_collision_radius = 0.5;
@@ -73,7 +204,7 @@ BT::NodeStatus ReplanCondition::tick()
   getInput("robot_frame", robot_frame);
   getInput("dyn_obs_topic", dyn_obs_topic);
   getInput("use_dynamic_obstacles", use_dynamic_obstacles);
-  getInput("timestamped_path_topic", ts_path_topic);
+  getInput("trajectory_topic", trajectory_topic);
   getInput("trajectory_status_topic", trajectory_status_topic);
   getInput("trajectory_status_max_age", trajectory_status_max_age);
   getInput("traj_collision_radius", traj_collision_radius);
@@ -112,22 +243,22 @@ BT::NodeStatus ReplanCondition::tick()
     dyn_obs_topic_.clear();
   }
 
-  // ---- Lazy timestamped path subscription ----
-  using TsPathMsg = sentry_nav_interfaces::msg::TimestampedPath;
-  if (use_dynamic_obstacles && (!ts_path_sub_ || ts_path_topic_ != ts_path_topic)) {
+  // ---- Lazy active trajectory subscription ----
+  using TrajectoryMsg = sentry_nav_interfaces::msg::MincoTrajectory;
+  if (use_dynamic_obstacles && (!trajectory_sub_ || trajectory_topic_ != trajectory_topic)) {
     rclcpp::SubscriptionOptions sub_options;
     sub_options.callback_group = callback_group_;
-    ts_path_sub_ = node_->create_subscription<TsPathMsg>(
-      ts_path_topic, rclcpp::QoS(10),
-      [this](const TsPathMsg::SharedPtr msg) {
-        std::lock_guard<std::mutex> lock(ts_path_mutex_);
-        latest_ts_path_ = msg;
+    trajectory_sub_ = node_->create_subscription<TrajectoryMsg>(
+      trajectory_topic, rclcpp::QoS(1),
+      [this](const TrajectoryMsg::SharedPtr msg) {
+        std::lock_guard<std::mutex> lock(trajectory_mutex_);
+        latest_trajectory_ = msg;
       }, sub_options);
-    ts_path_topic_ = ts_path_topic;
-  } else if (!use_dynamic_obstacles && ts_path_sub_) {
-    ts_path_sub_.reset();
-    latest_ts_path_.reset();
-    ts_path_topic_.clear();
+    trajectory_topic_ = trajectory_topic;
+  } else if (!use_dynamic_obstacles && trajectory_sub_) {
+    trajectory_sub_.reset();
+    latest_trajectory_.reset();
+    trajectory_topic_.clear();
   }
 
   // ---- Lazy trajectory status subscription ----
@@ -203,16 +334,15 @@ BT::NodeStatus ReplanCondition::tick()
         status_fresh = status_age <= std::max(trajectory_status_max_age, 0.0);
       }
     }
-    if (status_fresh && (!trajectory_status.active || trajectory_status.emergency_stop ||
-      trajectory_status.state == "EMERGENCY_STOP" ||
-      trajectory_status.state == "REPLAN_PENDING"))
+    if (status_fresh && trajectory_status.replan_requested)
     {
       RCLCPP_WARN_THROTTLE(
         node_->get_logger(), *node_->get_clock(), 1000,
         "[ReplanCondition] Executable trajectory state requests replan: state=%s active=%d "
-        "emergency=%d reason='%s'",
+        "emergency=%d reason='%s' replan_reason='%s'",
         trajectory_status.state.c_str(), trajectory_status.active,
-        trajectory_status.emergency_stop, trajectory_status.reason.c_str());
+        trajectory_status.emergency_stop, trajectory_status.reason.c_str(),
+        trajectory_status.replan_reason.c_str());
       last_replan_time_ = now;
       first_tick_ = false;
       return BT::NodeStatus::SUCCESS;
@@ -440,69 +570,51 @@ bool ReplanCondition::checkDynamicObstacleIntersection(
   double traj_collision_radius,
   double traj_lookahead_time) const
 {
-  // 护卫: 系统刚启动时可能尚未收到任何消息
-  sentry_nav_interfaces::msg::TimestampedPath::SharedPtr ts_path;
+  sentry_nav_interfaces::msg::MincoTrajectory::SharedPtr trajectory;
   sentry_nav_interfaces::msg::TrackedObstacleArray::SharedPtr dyn_obs;
   {
-    std::scoped_lock lk(ts_path_mutex_, dyn_obs_mutex_);
-    ts_path = latest_ts_path_;
+    std::scoped_lock lk(trajectory_mutex_, dyn_obs_mutex_);
+    trajectory = latest_trajectory_;
     dyn_obs = latest_dyn_obs_;
   }
 
-  if (!ts_path || !dyn_obs) { return false; }
-  if (ts_path->path.poses.empty() || ts_path->timestamps.empty()) { return false; }
+  if (!trajectory || !dyn_obs) { return false; }
+  if (trajectory->waypoints.empty() || trajectory->segment_times.empty()) { return false; }
   if (dyn_obs->obstacles.empty()) { return false; }
 
-  const size_t n_pts = ts_path->path.poses.size();
-  if (ts_path->timestamps.size() != n_pts) { return false; }
-
-  // 障碍物消息时延补偿: 用 ROS 时钟 (兼容仿真)
-  const double obs_age = (node_->now() - dyn_obs->header.stamp).seconds();
-  const double obs_age_clamped = std::max(0.0, std::min(obs_age, 1.0));  // 限制在 1s 内
-
-  // 找到路径中离机器人最近的点作为起始索引
-  size_t i_start = 0;
-  double min_dist_sq = std::numeric_limits<double>::max();
-  for (size_t i = 0; i < n_pts; ++i) {
-    const auto & pose = ts_path->path.poses[i].pose.position;
-    double dx = robot_x - pose.x;
-    double dy = robot_y - pose.y;
-    double d2 = dx * dx + dy * dy;
-    if (d2 < min_dist_sq) {
-      min_dist_sq = d2;
-      i_start = i;
-    }
+  const double duration = trajectoryDuration(*trajectory);
+  if (duration <= 1.0e-6) {
+    return false;
   }
 
-  const double t0 = ts_path->timestamps[i_start];
-
-  for (size_t i = i_start + 1; i < n_pts; ++i) {
-    if (ts_path->timestamps[i] < ts_path->timestamps[i - 1]) {
-      return false;
-    }
+  const rclcpp::Time now = node_->now();
+  rclcpp::Time trajectory_start(trajectory->start_time);
+  if (trajectory->start_time.sec == 0 && trajectory->start_time.nanosec == 0) {
+    trajectory_start = rclcpp::Time(trajectory->header.stamp);
   }
+  double schedule_time = (now - trajectory_start).seconds();
+  if (!std::isfinite(schedule_time)) {
+    schedule_time = 0.0;
+  }
+  schedule_time = std::clamp(schedule_time, 0.0, duration);
 
-  // 遍历 i_start 之后的路径点
-  for (size_t i = i_start; i < n_pts; ++i) {
-    const double t_i = ts_path->timestamps[i] - t0;
-    if (t_i > traj_lookahead_time) { break; }
+  const double closest_time = closestTrajectoryTime(*trajectory, robot_x, robot_y);
+  const double base_time = std::clamp(std::max(schedule_time, closest_time), 0.0, duration);
+  const double obstacle_age = std::clamp((now - dyn_obs->header.stamp).seconds(), 0.0, 1.0);
 
-    const double px = ts_path->path.poses[i].pose.position.x;
-    const double py = ts_path->path.poses[i].pose.position.y;
+  const double sample_dt = 0.10;
+  for (double lookahead_t = 0.0; lookahead_t <= traj_lookahead_time + 1.0e-6; lookahead_t += sample_dt) {
+    const double trajectory_time = std::min(duration, base_time + lookahead_t);
+    double px = 0.0;
+    double py = 0.0;
+    if (!trajectoryPositionAtTime(*trajectory, trajectory_time, px, py)) {
+      break;
+    }
+    const double obstacle_prediction_time = obstacle_age + lookahead_t;
 
     for (const auto & obs : dyn_obs->obstacles) {
-      // 时延补偿: 估计障碍物当前位置
-      const double cx = obs.x + obs.vx * obs_age_clamped;
-      const double cy = obs.y + obs.vy * obs_age_clamped;
-
-      // 时空预测: 障碍物在机器人到达 path[i] 时刻的位置
-      const double p_obs_x = cx + obs.vx * t_i;
-      const double p_obs_y = cy + obs.vy * t_i;
-
-      double dx = px - p_obs_x;
-      double dy = py - p_obs_y;
-      double dist = std::sqrt(dx * dx + dy * dy);
-
+      const auto obs_pos = obstaclePositionAtTime(obs, obstacle_prediction_time);
+      const double dist = std::hypot(px - obs_pos[0], py - obs_pos[1]);
       if (dist < traj_collision_radius + obs.radius) {
         return true;
       }
