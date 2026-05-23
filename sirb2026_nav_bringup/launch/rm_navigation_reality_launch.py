@@ -59,7 +59,7 @@ def generate_launch_description():
 
     declare_namespace_cmd = DeclareLaunchArgument(
         "namespace",
-        default_value="",
+        default_value="red_standard_robot1",
         description="Top-level namespace",
     )
 

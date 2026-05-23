@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import sys
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -20,18 +21,20 @@ from launch.actions import (
     DeclareLaunchArgument,
     GroupAction,
     IncludeLaunchDescription,
+    OpaqueFunction,
     SetEnvironmentVariable,
 )
 from launch.conditions import (
     IfCondition,
-    LaunchConfigurationEquals,
-    LaunchConfigurationNotEquals,
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node, PushRosNamespace, SetRemap
 from launch_ros.descriptions import ParameterFile
-from nav2_common.launch import ReplaceString, RewrittenYaml
+from nav2_common.launch import RewrittenYaml
+
+sys.path.append(os.path.dirname(__file__))
+from motion_profile_utils import prepare_navigation_params
 
 
 def generate_launch_description():
@@ -51,17 +54,8 @@ def generate_launch_description():
 
     param_substitutions = {"use_sim_time": use_sim_time, "yaml_filename": map_yaml_file}
 
-    params_file = ReplaceString(
-        source_file=params_file,
-        replacements={"<robot_namespace>": ""},
-        condition=LaunchConfigurationEquals("namespace", ""),
-    )
-
-    params_file = ReplaceString(
-        source_file=params_file,
-        replacements={"<robot_namespace>": ["/", namespace]},
-        condition=LaunchConfigurationNotEquals("namespace", ""),
-    )
+    prepare_navigation_params_cmd = OpaqueFunction(
+        function=lambda context, *_: prepare_navigation_params(context, params_file, namespace))
 
     configured_params = ParameterFile(
         RewrittenYaml(
@@ -206,6 +200,7 @@ def generate_launch_description():
     ld.add_action(declare_use_composition_cmd)
     ld.add_action(declare_use_respawn_cmd)
     ld.add_action(declare_log_level_cmd)
+    ld.add_action(prepare_navigation_params_cmd)
 
     ld.add_action(bringup_cmd_group)
 

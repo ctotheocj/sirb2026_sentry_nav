@@ -41,6 +41,7 @@ public:
       BT::InputPort<double>("exit_pass_margin", 0.2, "Distance past exit center that counts as exit"),
       BT::InputPort<double>("yaw_kp", 2.5, "Yaw velocity proportional gain"),
       BT::InputPort<double>("max_v_yaw", 1.8, "Absolute yaw velocity command limit"),
+      BT::InputPort<double>("yaw_offset_deg", 0.0, "Yaw offset applied to entry-exit heading"),
       BT::InputPort<geometry_msgs::msg::PoseStamped>("goal", "Navigation goal"),
       BT::InputPort<std::vector<geometry_msgs::msg::PoseStamped>>(
         "goals", "Navigation goals"),

@@ -9,7 +9,8 @@
 
 The current `sirb2026_nav_bringup` configuration uses `BackUpFreeSpace`,
 `OccupancyGridObstacleLayer`, and the BT node library. `IntensityVoxelLayer` is still built
-and exported, but it is not part of the default navigation YAML.
+and exported for deployments that need intensity-filtered 3D obstacle clouds, but it is not
+part of the default navigation YAML.
 
 ## BackUpFreeSpace
 
@@ -45,10 +46,18 @@ cleared by reporting both previous and current occupied bounds to Nav2's update 
 The layer also exposes `<layer_name>/set_semantic_layer_mode`
 (`sentry_nav_interfaces/srv/SetSemanticLayerMode`).
 
-The semantic mode service is used by hole-pass logic to suppress this layer while passing
-through configured holes. Default bringup calls both the global and local costmap services, so
-the online occupancy-grid obstacle layer is suppressed in both costmaps while static layers and
-the rest of the control chain stay active.
+For hole passing the layer has two mechanisms:
+
+- `clear_hole_corridors` removes dynamic occupancy-grid cells inside configured hole corridors
+  during normal navigation and hole-pass navigation. The corridor is the convex hull of the two
+  configured port polygons plus `clear_hole_margin`.
+- The semantic mode service suppresses the whole online occupancy-grid layer while the robot is
+  physically lowered in `hole_pass` mode. Static map layers stay active.
+
+`sirb2026_nav_bringup` keeps the hole geometry as a single source of truth under
+`bt_navigator.ros__parameters.hole_pass`. The launch path expands that geometry into
+`local_costmap` and `global_costmap` layer parameters before Nav2 nodes start, so users should
+edit the hole polygons only in the `hole_pass.holes` block.
 
 | Parameter | Default | Notes |
 | --- | --- | --- |
@@ -57,6 +66,12 @@ the rest of the control chain stay active.
 | `occupied_threshold` | `65` | Occupancy value treated as lethal |
 | `source_timeout` | `0.6` | Mark the layer non-current when the input snapshot is stale; does not clear the last valid snapshot |
 | `stamp_source_cell_area` | `true` | Stamp the source grid cell area instead of only the center |
+| `clear_hole_corridors` | `false` | Filter occupied cells inside configured hole corridors |
+| `clear_hole_frame` | `map` | Frame of `clear_holes.*` polygons |
+| `clear_hole_margin` | `0.15` | Extra clearance around each generated corridor polygon |
+| `clear_hole_ids` | `[]` | Hole ids injected from `bt_navigator.hole_pass.hole_ids` by launch |
+| `clear_holes.<id>.port_a_polygon` | `[]` | Injected port A polygon for corridor filtering |
+| `clear_holes.<id>.port_b_polygon` | `[]` | Injected port B polygon for corridor filtering |
 | `debug_logging` | `false` | Throttled layer diagnostics |
 
 ## IntensityVoxelLayer
@@ -73,9 +88,10 @@ Additional parameters beyond the usual Nav2 voxel/obstacle-layer parameters:
 ## BT Nodes
 
 The package exports the BT plugin library `sirb_nav2_plugins_nodes`, which is listed in
-`bt_navigator.plugin_lib_names`. The current behavior trees use these custom nodes for
-trajectory candidate generation, committing trajectories, replanning gates, localization
-readiness, nearby-goal recovery, and hole-pass mode control.
+`bt_navigator.plugin_lib_names`. The current default behavior trees use custom nodes for
+trajectory candidate generation, committing trajectories, replanning gates, nearby-goal
+recovery, and hole-pass mode control. `PathGate` and `LocalizationReady` remain exported for
+trees that need them, but they are not part of the default XML files.
 
 ### HolePassModeController
 
@@ -115,9 +131,11 @@ hole can trigger again.
 
 Default bringup sets `navigation_mode_manager.semantic_layer_services` for both global and
 local `occupancy_grid_layer` services. Therefore hole-pass mode suppresses the dynamic
-occupancy-grid obstacle layer in both costmaps; static layers, trajectory manager collision
-checking, MPC, velocity smoother, and `fake_vel_transform` stay on the normal navigation
-chain.
+occupancy-grid obstacle layer in both costmaps. In addition,
+`navigation_mode_manager/mode` is consumed by `TrajectoryManager` and `MpcController`; while the
+mode is `hole_pass`, the trajectory-manager forward collision rejection and the MPC predicted
+collision hard stop are bypassed. Velocity smoothing and `fake_vel_transform` remain on the
+normal command chain.
 
 The manager owns the active hole-pass command state. BT halt/destruction and watchdog expiry do
 not restore normal mode by default, so a navigation failure while lowered keeps publishing the

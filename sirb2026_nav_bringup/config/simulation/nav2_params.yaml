@@ -131,7 +131,7 @@ fake_vel_transform:
     odom_topic: odometry
     robot_base_frame: gimbal_yaw
     fake_robot_base_frame: gimbal_yaw_fake
-    input_cmd_vel_topic: cmd_vel_selectedodom
+    input_cmd_vel_topic: cmd_vel_selected
     input_cmd_vel_stamped_topic: ""
     output_cmd_vel_topic: cmd_vel
     odom_frame: odom
@@ -488,6 +488,9 @@ local_costmap:
         occupied_threshold: 75
         source_timeout: 0.6
         stamp_source_cell_area: true
+        clear_hole_corridors: true
+        clear_hole_frame: map
+        clear_hole_margin: 0.15
         debug_logging: false
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
@@ -523,11 +526,14 @@ global_costmap:
         occupied_threshold: 75
         source_timeout: 0.6
         stamp_source_cell_area: true
+        clear_hole_corridors: true
+        clear_hole_frame: map
+        clear_hole_margin: 0.15
         debug_logging: false
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
-        inflation_radius: 0.25
-        cost_scaling_factor: 8.0
+        inflation_radius: 0.55
+        cost_scaling_factor: 3.0
       always_send_full_costmap: true
 
 map_server:
@@ -868,9 +874,9 @@ grid_map_node:
     use_sim_time: true
     map:
       resolution: 0.05
-      obstacles_inflation: 0.08
-      obstacles_inflation_xy: 0.08
-      obstacles_inflation_z: 0.0
+      obstacles_inflation: 0.1
+      obstacles_inflation_xy: 0.1
+      obstacles_inflation_z: 0.02
       frame_id: map
       local_map_margin: 10
       virtual_ceil_height: -1.0

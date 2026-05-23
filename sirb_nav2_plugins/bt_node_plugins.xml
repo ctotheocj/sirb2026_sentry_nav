@@ -1,9 +1,4 @@
 <library path="sirb_nav2_plugins_nodes">
-  <class type="sirb_nav2_plugins::EnemyDetectedCondition" base_class_type="BT::ConditionNode">
-    <description>
-      检测是否发现敌人的条件节点,未使用
-    </description>
-  </class>
   <class type="sirb_nav2_plugins::SelectNearbyGoal" base_class_type="BT::ActionNodeBase">
     <description>
       在目标点周围采样并选择空闲点作为新目标

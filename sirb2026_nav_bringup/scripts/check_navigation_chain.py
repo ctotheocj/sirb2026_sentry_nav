@@ -197,6 +197,15 @@ CORE_CHECKS = (
         note="lower/raise command plus yaw-rate command while hole-pass mode is active; raise otherwise",
     ),
     TopicCheck(
+        phase="hole_pass",
+        topic="navigation_mode_manager/mode",
+        msg_type="std_msgs/msg/String",
+        expected_rate="navigation_mode_manager command period",
+        required_publishers=("navigation_mode_manager",),
+        required_subscribers=("controller_server", "trajectory_manager"),
+        note="mode gate for MPC predicted-collision stop and trajectory-manager forward collision check",
+    ),
+    TopicCheck(
         phase="control",
         topic="cmd_vel",
         msg_type="geometry_msgs/msg/Twist",

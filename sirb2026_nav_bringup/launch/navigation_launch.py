@@ -14,15 +14,19 @@
 
 
 import os
+import sys
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, GroupAction, OpaqueFunction, SetEnvironmentVariable
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import LoadComposableNodes, Node
 from launch_ros.descriptions import ComposableNode, ParameterFile
 from nav2_common.launch import RewrittenYaml
+
+sys.path.append(os.path.dirname(__file__))
+from motion_profile_utils import prepare_navigation_params
 
 
 def generate_launch_description():
@@ -50,6 +54,9 @@ def generate_launch_description():
     ]
 
     param_substitutions = {"use_sim_time": use_sim_time, "autostart": autostart}
+
+    prepare_navigation_params_cmd = OpaqueFunction(
+        function=lambda context, *_: prepare_navigation_params(context, params_file, namespace))
 
     configured_params = ParameterFile(
         RewrittenYaml(
@@ -402,6 +409,7 @@ def generate_launch_description():
     ld.add_action(declare_use_respawn_cmd)
     ld.add_action(declare_log_level_cmd)
     ld.add_action(declare_slam_cmd)
+    ld.add_action(prepare_navigation_params_cmd)
     ld.add_action(load_nodes)
     ld.add_action(load_composable_nodes)
     ld.add_action(load_sensor_scan_generation_composable)

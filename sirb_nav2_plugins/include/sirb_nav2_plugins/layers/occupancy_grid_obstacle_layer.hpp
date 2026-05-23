@@ -39,10 +39,44 @@ private:
     double max_y;
   };
 
+  struct Point2D
+  {
+    double x;
+    double y;
+  };
+
+  struct ClearZone
+  {
+    std::string id;
+    std::vector<Point2D> polygon;
+    CellArea bounds;
+  };
+
   void incomingMap(const nav_msgs::msg::OccupancyGrid::SharedPtr msg);
   void setSemanticLayerModeService(
     const std::shared_ptr<sentry_nav_interfaces::srv::SetSemanticLayerMode::Request> request,
     std::shared_ptr<sentry_nav_interfaces::srv::SetSemanticLayerMode::Response> response);
+  void loadClearZones();
+  bool validPolygonParameter(const std::vector<double> & polygon) const;
+  std::vector<Point2D> pointsFromParameter(const std::vector<double> & polygon) const;
+  std::vector<Point2D> buildCorridorPolygon(
+    const std::vector<double> & port_a,
+    const std::vector<double> & port_b) const;
+  std::vector<Point2D> convexHull(std::vector<Point2D> points) const;
+  CellArea boundsForPolygon(const std::vector<Point2D> & polygon, double margin) const;
+  bool transformClearZonesToCostmapFrame(std::vector<ClearZone> & zones) const;
+  ClearZone transformClearZone(
+    const ClearZone & zone,
+    const geometry_msgs::msg::TransformStamped & transform,
+    bool same_frame) const;
+  size_t filterCellsInClearZones(
+    std::vector<CellArea> & cells,
+    const std::vector<ClearZone> & zones) const;
+  bool cellInClearZone(const CellArea & cell, const ClearZone & zone) const;
+  bool pointInPolygon(const Point2D & point, const std::vector<Point2D> & polygon) const;
+  double distanceToPolygon(const Point2D & point, const std::vector<Point2D> & polygon) const;
+  double distanceToSegment(const Point2D & point, const Point2D & a, const Point2D & b) const;
+  double cross(const Point2D & origin, const Point2D & a, const Point2D & b) const;
   CellArea cellAreaFromGrid(
     const nav_msgs::msg::MapMetaData & info, unsigned int x, unsigned int y) const;
   bool lookupTransformToCostmapFrame(
@@ -65,8 +99,11 @@ private:
   int occupied_threshold_;
   double source_timeout_;
   bool stamp_source_cell_area_;
+  bool clear_hole_corridors_{false};
+  double clear_hole_margin_{0.15};
   bool debug_logging_;
   std::string topic_;
+  std::string clear_hole_frame_{"map"};
   rclcpp::Service<sentry_nav_interfaces::srv::SetSemanticLayerMode>::SharedPtr
     set_semantic_mode_srv_;
   nav_msgs::msg::OccupancyGrid::SharedPtr map_;
@@ -78,6 +115,7 @@ private:
   std::vector<CellArea> source_cells_;
   std::vector<CellArea> last_stamped_target_cells_;
   std::vector<CellArea> cost_update_cells_;
+  std::vector<ClearZone> clear_zones_;
   std::string source_frame_;
   double last_map_time_sec_{-1.0};
   bool needs_clear_previous_{false};

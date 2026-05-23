@@ -169,6 +169,79 @@ def apply_yaw_fusion_mode(data, enabled):
     yaw_fusion.setdefault("debug_logging", False)
 
 
+def sync_hole_clear_corridors(data):
+    bt_nav = _node_params(data, "bt_navigator")
+    hole_pass = bt_nav.get("hole_pass", {})
+    if not isinstance(hole_pass, dict):
+        return 0
+    holes = hole_pass.get("holes", {})
+    hole_ids = hole_pass.get("hole_ids", [])
+    if not isinstance(holes, dict) or not isinstance(hole_ids, list):
+        return 0
+
+    synced = 0
+    for node_name in ("local_costmap", "global_costmap"):
+        node = data.get(node_name, {})
+        nested = node.get(node_name, {}) if isinstance(node, dict) else {}
+        params = nested.get("ros__parameters") if isinstance(nested, dict) else None
+        if not isinstance(params, dict):
+            continue
+        layer = params.get("occupancy_grid_layer")
+        if not isinstance(layer, dict):
+            continue
+
+        layer["clear_hole_corridors"] = bool(layer.get("clear_hole_corridors", True))
+        layer.setdefault("clear_hole_frame", "map")
+        layer.setdefault("clear_hole_margin", 0.15)
+        layer["clear_hole_ids"] = list(hole_ids)
+        layer["clear_holes"] = {
+            hole_id: {
+                "port_a_polygon": list(holes.get(hole_id, {}).get("port_a_polygon", [])),
+                "port_b_polygon": list(holes.get(hole_id, {}).get("port_b_polygon", [])),
+            }
+            for hole_id in hole_ids
+            if isinstance(holes.get(hole_id), dict)
+        }
+        synced += 1
+    return synced
+
+
+def _replace_robot_namespace_placeholders(text, namespace):
+    ns = namespace.strip("/")
+    replacement = f"/{ns}" if ns else ""
+    return text.replace("<robot_namespace>", replacement)
+
+
+def prepare_navigation_params(context, params_file_config, namespace_config=None):
+    if context.launch_configurations.get("_sirb2026_navigation_params_prepared") == "true":
+        return []
+
+    source = context.perform_substitution(params_file_config)
+    if namespace_config is not None:
+        namespace = context.perform_substitution(namespace_config)
+    else:
+        namespace = context.launch_configurations.get("namespace", "")
+
+    with open(source, "r") as f:
+        text = f.read()
+    text = _replace_robot_namespace_placeholders(text, namespace)
+    data = yaml.safe_load(text)
+    synced_clear_corridors = sync_hole_clear_corridors(data)
+
+    safe_ns = "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in namespace)
+    fd, output = tempfile.mkstemp(
+        prefix=f"sirb2026_navigation_{safe_ns or 'root'}_", suffix=".yaml")
+    os.close(fd)
+    with open(output, "w") as f:
+        yaml.dump(data, f, Dumper=_NoAliasSafeDumper, sort_keys=False, allow_unicode=True)
+
+    context.launch_configurations["params_file"] = output
+    context.launch_configurations["_sirb2026_navigation_params_prepared"] = "true"
+    print(f"[navigation_params] generated params: {output}")
+    print(f"[navigation_params] hole_clear_corridors synced_layers={synced_clear_corridors}")
+    return []
+
+
 def apply_launch_mode_guards(data, use_composition):
     if use_composition:
         return False

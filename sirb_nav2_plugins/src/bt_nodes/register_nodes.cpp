@@ -1,6 +1,5 @@
 #include "behaviortree_cpp_v3/bt_factory.h"
 
-#include "sirb_nav2_plugins/bt_nodes/enemy_detected_condition.hpp"
 #include "sirb_nav2_plugins/bt_nodes/select_nearby_goal.hpp"
 #include "sirb_nav2_plugins/bt_nodes/corridor_replan_condition.hpp"
 #include "sirb_nav2_plugins/bt_nodes/path_gate.hpp"
@@ -11,7 +10,6 @@
 
 BT_REGISTER_NODES(factory)
 {
-  factory.registerNodeType<sirb_nav2_plugins::EnemyDetectedCondition>("EnemyDetected");
   factory.registerNodeType<sirb_nav2_plugins::SelectNearbyGoal>("SelectNearbyGoal");
   factory.registerNodeType<sirb_nav2_plugins::ReplanCondition>("ReplanCondition");
   factory.registerNodeType<sirb_nav2_plugins::PathGate>("PathGate");

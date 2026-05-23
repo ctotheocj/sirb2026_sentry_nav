@@ -22,7 +22,6 @@ ament_auto_add_library(pb_back_up_frees_space_behavior SHARED
 ament_auto_add_library(sirb_nav2_plugins_nodes SHARED
   src/layers/intensity_voxel_layer.cpp
   src/layers/occupancy_grid_obstacle_layer.cpp
-  src/bt_nodes/enemy_detected_condition.cpp
   src/bt_nodes/select_nearby_goal.cpp
   src/bt_nodes/corridor_replan_condition.cpp
   src/bt_nodes/path_gate.cpp
