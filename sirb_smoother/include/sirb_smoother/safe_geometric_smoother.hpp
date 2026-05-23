@@ -14,6 +14,7 @@
 #include "nav2_costmap_2d/footprint.hpp"
 #include "nav2_costmap_2d/footprint_collision_checker.hpp"
 #include "nav2_costmap_2d/footprint_subscriber.hpp"
+#include "nav_msgs/msg/odometry.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "sirb_smoother/minco_optimizer.hpp"
 #include "plan_env/grid_map.h"
@@ -64,7 +65,9 @@ private:
     const Footprint & footprint,
     MincoOptimizer::Result & result,
     nav_msgs::msg::Path & candidate,
-    std::string & diagnostic) const;
+    std::string & diagnostic,
+    const Eigen::Vector3d * initial_velocity = nullptr,
+    const Eigen::Vector3d * initial_acceleration = nullptr) const;
 
   bool isPathSafe(
     const nav_msgs::msg::Path & path, const nav2_costmap_2d::Costmap2D & costmap,
@@ -119,6 +122,18 @@ private:
     double total_dyaw{0.0};
   };
   PathMetrics computePathMetrics(const nav_msgs::msg::Path & path) const;
+
+  struct InitialState
+  {
+    Eigen::Vector3d velocity{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d acceleration{Eigen::Vector3d::Zero()};
+    bool valid{false};
+    double age{0.0};
+    double speed{0.0};
+    std::string reason;
+  };
+  void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
+  InitialState getInitialStateInFrame(const std_msgs::msg::Header & target_header) const;
 
   std::vector<geometry_msgs::msg::PoseStamped> collectCollisionPoses(
     const nav_msgs::msg::Path & path, const nav2_costmap_2d::Costmap2D & costmap,
@@ -197,6 +212,10 @@ private:
   mutable Trajectory<5> cached_traj_;
   mutable std::vector<Eigen::Vector3d> cached_reuse_waypoints_;
   mutable Eigen::VectorXd cached_reuse_times_;
+  mutable Eigen::Vector3d cached_initial_velocity_{Eigen::Vector3d::Zero()};
+  mutable Eigen::Vector3d cached_initial_acceleration_{Eigen::Vector3d::Zero()};
+  mutable Eigen::Vector3d cached_reuse_initial_velocity_{Eigen::Vector3d::Zero()};
+  mutable Eigen::Vector3d cached_reuse_initial_acceleration_{Eigen::Vector3d::Zero()};
   mutable Eigen::Vector3d cached_goal_{0, 0, 0};
   bool enable_stitching_{true};
   double retain_duration_{0.3};
@@ -220,7 +239,16 @@ private:
   rclcpp::Publisher<sentry_nav_interfaces::msg::MincoTrajectory>::SharedPtr mpc_traj_pub_;
   rclcpp_action::Server<GenerateMincoCandidate>::SharedPtr generate_action_server_;
 
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<sentry_nav_interfaces::msg::TrackedObstacleArray>::SharedPtr dynamic_obs_sub_;
+  mutable std::mutex odom_mutex_;
+  nav_msgs::msg::Odometry latest_odom_;
+  bool has_odom_{false};
+  bool use_odom_initial_state_{true};
+  bool odom_twist_in_child_frame_{true};
+  std::string odom_topic_{"odometry"};
+  double odom_max_age_sec_{0.25};
+  double initial_velocity_max_{0.0};
   std::vector<DynamicObstacle> dynamic_obstacles_;
   std::atomic_bool generation_in_flight_{false};
   std::atomic_bool generation_cancel_requested_{false};
@@ -228,6 +256,8 @@ private:
   mutable std::mutex generation_mutex_;
   mutable sentry_nav_interfaces::msg::MincoTrajectory last_candidate_minco_;
   mutable bool has_last_candidate_minco_{false};
+  mutable std::string last_candidate_product_type_{"none"};
+  mutable bool last_candidate_prefer_keep_active_{false};
   std::string dynamic_obstacle_topic_{"dynamic_obstacles"};
 };
 

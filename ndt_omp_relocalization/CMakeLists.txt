@@ -21,6 +21,7 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_eigen REQUIRED)
 find_package(tf2_ros REQUIRED)
@@ -66,6 +67,7 @@ ament_target_dependencies(${PROJECT_NAME}
   rclcpp_components
   sensor_msgs
   geometry_msgs
+  diagnostic_msgs
   tf2
   tf2_eigen
   tf2_ros
@@ -119,6 +121,7 @@ ament_export_dependencies(
   rclcpp_components
   sensor_msgs
   geometry_msgs
+  diagnostic_msgs
   tf2
   tf2_eigen
   tf2_ros

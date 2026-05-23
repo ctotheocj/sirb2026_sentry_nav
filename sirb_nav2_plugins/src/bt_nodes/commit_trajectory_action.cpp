@@ -51,14 +51,17 @@ void CommitTrajectoryAction::on_tick()
   bool allow_keep_active_on_reject = true;
   getInput("allow_keep_active_on_reject", allow_keep_active_on_reject);
   goal_.allow_keep_active_on_reject = allow_keep_active_on_reject;
+  bool prefer_keep_active = false;
+  getInput("prefer_keep_active", prefer_keep_active);
+  goal_.prefer_keep_active = prefer_keep_active;
 
   RCLCPP_INFO(
     node_->get_logger(),
     "CommitTrajectory: tick path_poses=%zu frame='%s' minco_waypoints=%zu minco_segments=%zu "
-    "allow_keep_active_on_reject=%d",
+    "allow_keep_active_on_reject=%d prefer_keep_active=%d",
     candidate_path_.poses.size(), candidate_path_.header.frame_id.c_str(),
     goal_.candidate_minco.waypoints.size(), goal_.candidate_minco.segment_times.size(),
-    goal_.allow_keep_active_on_reject);
+    goal_.allow_keep_active_on_reject, goal_.prefer_keep_active);
 }
 
 BT::NodeStatus CommitTrajectoryAction::on_success()

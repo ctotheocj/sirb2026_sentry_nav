@@ -50,7 +50,7 @@ BT::PortsList LocalizationReadyCondition::providedPorts()
       "Deprecated single localization diagnostics topic; use diagnostics_topics"),
     BT::InputPort<double>("max_age", 0.8, "Maximum accepted diagnostics age in seconds"),
     BT::InputPort<int>("required_ready_ticks", 2, "Consecutive ready BT ticks required"),
-    BT::InputPort<std::string>("required_state", "TRACKING", "Required localization_state value"),
+    BT::InputPort<std::string>("required_state", "trusted", "Required localization_state value"),
     BT::InputPort<bool>("require_trusted", true, "Require diagnostics key trusted=true"),
     BT::InputPort<bool>(
       "allow_missing_diagnostics", false,

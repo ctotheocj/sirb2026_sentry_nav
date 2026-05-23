@@ -37,6 +37,7 @@ void OccupancyGridObstacleLayer::onInitialize()
   declareParameter("stamp_source_cell_area", rclcpp::ParameterValue(true));
   declareParameter("clear_hole_corridors", rclcpp::ParameterValue(false));
   declareParameter("clear_hole_margin", rclcpp::ParameterValue(0.15));
+  declareParameter("clear_hole_max_area", rclcpp::ParameterValue(0.0));
   declareParameter("clear_hole_frame", rclcpp::ParameterValue(std::string("map")));
   declareParameter("clear_hole_ids", rclcpp::ParameterValue(std::vector<std::string>{}));
   declareParameter("debug_logging", rclcpp::ParameterValue(false));
@@ -48,10 +49,12 @@ void OccupancyGridObstacleLayer::onInitialize()
   node->get_parameter(name_ + ".stamp_source_cell_area", stamp_source_cell_area_);
   node->get_parameter(name_ + ".clear_hole_corridors", clear_hole_corridors_);
   node->get_parameter(name_ + ".clear_hole_margin", clear_hole_margin_);
+  node->get_parameter(name_ + ".clear_hole_max_area", clear_hole_max_area_);
   node->get_parameter(name_ + ".clear_hole_frame", clear_hole_frame_);
   node->get_parameter(name_ + ".debug_logging", debug_logging_);
 
   clear_hole_margin_ = std::max(0.0, clear_hole_margin_);
+  clear_hole_max_area_ = std::max(0.0, clear_hole_max_area_);
   loadClearZones();
 
   clock_ = node->get_clock();
@@ -384,6 +387,15 @@ void OccupancyGridObstacleLayer::loadClearZones()
     zone.id = id;
     zone.polygon = std::move(corridor);
     zone.bounds = boundsForPolygon(zone.polygon, clear_hole_margin_);
+    const double area = std::max(0.0, zone.bounds.max_x - zone.bounds.min_x) *
+      std::max(0.0, zone.bounds.max_y - zone.bounds.min_y);
+    if (clear_hole_max_area_ > 0.0 && area > clear_hole_max_area_) {
+      RCLCPP_WARN(
+        logger_,
+        "[%s] clear hole '%s' AABB area %.3fm^2 exceeds clear_hole_max_area %.3fm^2; skipped",
+        name_.c_str(), id.c_str(), area, clear_hole_max_area_);
+      continue;
+    }
     clear_zones_.push_back(std::move(zone));
   }
 
@@ -416,56 +428,29 @@ OccupancyGridObstacleLayer::buildCorridorPolygon(
   auto points = pointsFromParameter(port_a);
   const auto port_b_points = pointsFromParameter(port_b);
   points.insert(points.end(), port_b_points.begin(), port_b_points.end());
-  return convexHull(std::move(points));
-}
-
-std::vector<OccupancyGridObstacleLayer::Point2D> OccupancyGridObstacleLayer::convexHull(
-  std::vector<Point2D> points) const
-{
-  constexpr double kEpsilon = 1e-9;
-  std::sort(
-    points.begin(), points.end(),
-    [](const Point2D & lhs, const Point2D & rhs) {
-      if (lhs.x == rhs.x) {
-        return lhs.y < rhs.y;
-      }
-      return lhs.x < rhs.x;
-    });
-  points.erase(
-    std::unique(
-      points.begin(), points.end(),
-      [kEpsilon](const Point2D & lhs, const Point2D & rhs) {
-        return std::abs(lhs.x - rhs.x) <= kEpsilon && std::abs(lhs.y - rhs.y) <= kEpsilon;
-      }),
-    points.end());
-  if (points.size() <= 2) {
-    return points;
+  if (points.empty()) {
+    return {};
   }
 
-  std::vector<Point2D> hull;
-  hull.reserve(points.size() * 2);
-  for (const auto & point : points) {
-    while (hull.size() >= 2 &&
-      cross(hull[hull.size() - 2], hull[hull.size() - 1], point) <= kEpsilon)
-    {
-      hull.pop_back();
-    }
-    hull.push_back(point);
+  double min_x = std::numeric_limits<double>::max();
+  double min_y = std::numeric_limits<double>::max();
+  double max_x = std::numeric_limits<double>::lowest();
+  double max_y = std::numeric_limits<double>::lowest();
+  for (const auto & p : points) {
+    min_x = std::min(min_x, p.x);
+    min_y = std::min(min_y, p.y);
+    max_x = std::max(max_x, p.x);
+    max_y = std::max(max_y, p.y);
   }
-
-  const size_t lower_size = hull.size();
-  for (auto it = points.rbegin() + 1; it != points.rend(); ++it) {
-    while (hull.size() > lower_size &&
-      cross(hull[hull.size() - 2], hull[hull.size() - 1], *it) <= kEpsilon)
-    {
-      hull.pop_back();
-    }
-    hull.push_back(*it);
+  if (max_x - min_x <= 1.0e-6 || max_y - min_y <= 1.0e-6) {
+    return {};
   }
-  if (!hull.empty()) {
-    hull.pop_back();
-  }
-  return hull;
+  return {
+    Point2D{min_x, min_y},
+    Point2D{max_x, min_y},
+    Point2D{max_x, max_y},
+    Point2D{min_x, max_y},
+  };
 }
 
 OccupancyGridObstacleLayer::CellArea OccupancyGridObstacleLayer::boundsForPolygon(
@@ -627,13 +612,6 @@ double OccupancyGridObstacleLayer::distanceToSegment(
   const double proj_x = a.x + t * vx;
   const double proj_y = a.y + t * vy;
   return std::hypot(point.x - proj_x, point.y - proj_y);
-}
-
-double OccupancyGridObstacleLayer::cross(
-  const Point2D & origin, const Point2D & a, const Point2D & b) const
-{
-  return (a.x - origin.x) * (b.y - origin.y) -
-         (a.y - origin.y) * (b.x - origin.x);
 }
 
 OccupancyGridObstacleLayer::CellArea OccupancyGridObstacleLayer::cellAreaFromGrid(

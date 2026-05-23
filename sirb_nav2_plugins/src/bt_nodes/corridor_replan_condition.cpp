@@ -134,11 +134,12 @@ BT::NodeStatus ReplanCondition::tick()
   if (!trajectory_status_sub_ || trajectory_status_topic_ != trajectory_status_topic) {
     rclcpp::SubscriptionOptions sub_options;
     sub_options.callback_group = callback_group_;
-    trajectory_status_sub_ = node_->create_subscription<std_msgs::msg::String>(
+    trajectory_status_sub_ =
+      node_->create_subscription<sentry_nav_interfaces::msg::TrajectoryStatus>(
       trajectory_status_topic, rclcpp::QoS(1),
-      [this](const std_msgs::msg::String::SharedPtr msg) {
+      [this](const sentry_nav_interfaces::msg::TrajectoryStatus::SharedPtr msg) {
         std::lock_guard<std::mutex> lock(trajectory_status_mutex_);
-        latest_trajectory_status_ = msg->data;
+        latest_trajectory_status_ = *msg;
         latest_trajectory_status_time_ = std::chrono::steady_clock::now();
         have_trajectory_status_ = true;
       }, sub_options);
@@ -191,7 +192,7 @@ BT::NodeStatus ReplanCondition::tick()
   double elapsed_s = std::chrono::duration<double>(now - last_replan_time_).count();
 
   if (elapsed_s >= min_replan_period) {
-    std::string trajectory_status;
+    sentry_nav_interfaces::msg::TrajectoryStatus trajectory_status;
     bool status_fresh = false;
     {
       std::lock_guard<std::mutex> lock(trajectory_status_mutex_);
@@ -202,13 +203,16 @@ BT::NodeStatus ReplanCondition::tick()
         status_fresh = status_age <= std::max(trajectory_status_max_age, 0.0);
       }
     }
-    if (status_fresh &&
-      trajectory_status.find("active=0") != std::string::npos)
+    if (status_fresh && (!trajectory_status.active || trajectory_status.emergency_stop ||
+      trajectory_status.state == "EMERGENCY_STOP" ||
+      trajectory_status.state == "REPLAN_PENDING"))
     {
       RCLCPP_WARN_THROTTLE(
         node_->get_logger(), *node_->get_clock(), 1000,
-        "[ReplanCondition] Tracking path has no executable MINCO trajectory, requesting replan: %s",
-        trajectory_status.c_str());
+        "[ReplanCondition] Executable trajectory state requests replan: state=%s active=%d "
+        "emergency=%d reason='%s'",
+        trajectory_status.state.c_str(), trajectory_status.active,
+        trajectory_status.emergency_stop, trajectory_status.reason.c_str());
       last_replan_time_ = now;
       first_tick_ = false;
       return BT::NodeStatus::SUCCESS;

@@ -161,9 +161,9 @@ ndt_omp_relocalization:
     ndt_step_size: 0.08
     ndt_epsilon: 0.01
     ndt_max_iterations: 40
-    ndt_search_method: 3             # 0:KDTREE 1:DIRECT7 2:DIRECT1 3:DIRECT26
-    fitness_score_threshold: 2.0
-    registration_period_ms: 150
+    ndt_search_method: 1             # 0:KDTREE 1:DIRECT7 2:DIRECT1 3:DIRECT26
+    fitness_score_threshold: 1.0
+    registration_period_ms: 250
     global_leaf_size: 0.12
     registered_leaf_size: 0.12
     min_source_points: 800
@@ -178,7 +178,7 @@ ndt_omp_relocalization:
     # prior_pcd_file: ""
     enable_roll_pitch_fix: true
     trust_ndt_threshold: 5           # consecutive converged frames before trusting NDT
-    jump_threshold_xy: 0.70          # (m) jump threshold in xy
+    jump_threshold_xy: 0.30          # (m) jump threshold in xy
     jump_threshold_yaw: 0.45         # (rad) jump threshold in yaw
     jump_threshold_rp: 0.18          # (rad) jump threshold in roll/pitch
     enable_quality_gate: true
@@ -188,7 +188,7 @@ ndt_omp_relocalization:
     quality_min_overlap_ratio: 0.30
     quality_max_median_residual: 0.45
     quality_max_p90_residual: 1.2
-    publish_tf_only_when_trusted: false
+    publish_tf_only_when_trusted: true
     freeze_tf_when_not_trusted: true
     
 pointcloud_to_laserscan:
@@ -381,7 +381,7 @@ controller_server:
       yaw_goal_tolerance: 6.28  # 不支持旋转
     FollowPath:
       plugin: "f_mpc_controller::MpcController"
-      debug_logging: false
+      debug_logging: true
       # MPC controller params
       use_odometry_state: true
       odom_topic: "odometry"
@@ -395,7 +395,7 @@ controller_server:
       minco_timeout_sec: 0.80
       minco_goal_reset_tolerance: 0.5
       reset_warm_start_on_goal_change_only: true
-      allow_path_fallback_without_minco: true
+      allow_path_fallback_without_minco: false
       minco_unavailable_failure_sec: 0.8
       prevent_tracking_reverse: true
       reverse_guard_min_ref_speed: 0.05
@@ -484,6 +484,7 @@ local_costmap:
         clear_hole_corridors: true
         clear_hole_frame: map
         clear_hole_margin: 0.15
+        clear_hole_max_area: 20.0
         debug_logging: false
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
@@ -514,6 +515,7 @@ global_costmap:
         clear_hole_corridors: true
         clear_hole_frame: map
         clear_hole_margin: 0.15
+        clear_hole_max_area: 20.0
         debug_logging: false
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
@@ -591,7 +593,7 @@ smoother_server:
       minco_dynamics_sample_dt: 0.08
       minco_dynamic_realloc_max_segment_scale: 8.0
       min_clearance_for_removal: 0.12
-      minco_min_segment_time: 0.15
+      minco_min_segment_time: 0.10
       minco_max_segment_time: 4.0
       minco_max_pieces: 60
       minco_guide_fillet_enabled: true

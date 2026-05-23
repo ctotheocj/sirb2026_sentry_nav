@@ -33,7 +33,9 @@ MincoOptimizer::Result MincoOptimizer::smooth(
   const nav_msgs::msg::Path & input, nav_msgs::msg::Path & output,
   const nav2_costmap_2d::Costmap2D * costmap,
   const std::vector<DynamicObstacle> * dynamic_obstacles,
-  const std::function<bool()> * should_cancel) const
+  const std::function<bool()> * should_cancel,
+  const Eigen::Vector3d * initial_velocity,
+  const Eigen::Vector3d * initial_acceleration) const
 {
   Result result;
   output = input;
@@ -70,7 +72,8 @@ MincoOptimizer::Result MincoOptimizer::smooth(
       optimizeWaypoints(
         points, guide, times, costmap, dynamic_obstacles,
         options_.phase0_w_energy, options_.phase0_w_reference, options_.phase0_w_obstacle,
-        options_.phase0_max_iterations, phase0_cost, false, should_cancel);
+        options_.phase0_max_iterations, phase0_cost, false, should_cancel,
+        initial_velocity, initial_acceleration);
       if (should_cancel && (*should_cancel)()) {
         result.reason = "MINCO optimization canceled during PHASE0";
         return result;
@@ -85,7 +88,8 @@ MincoOptimizer::Result MincoOptimizer::smooth(
     result.pre_ret = optimizeWaypoints(
       points, guide, times, costmap, dynamic_obstacles,
       options_.pre_w_energy, options_.pre_w_reference, options_.pre_w_obstacle,
-      options_.pre_max_iterations, result.pre_cost, false, should_cancel);
+      options_.pre_max_iterations, result.pre_cost, false, should_cancel,
+      initial_velocity, initial_acceleration);
     if (should_cancel && (*should_cancel)()) {
       result.reason = "MINCO optimization canceled during PRE";
       return result;
@@ -112,7 +116,8 @@ MincoOptimizer::Result MincoOptimizer::smooth(
     result.fine_ret = optimizeWaypoints(
       fine_points, guide, times, costmap, dynamic_obstacles,
       options_.fine_w_energy, options_.fine_w_reference, options_.fine_w_obstacle,
-      options_.fine_max_iterations, result.fine_cost, true, should_cancel);
+      options_.fine_max_iterations, result.fine_cost, true, should_cancel,
+      initial_velocity, initial_acceleration);
     if (should_cancel && (*should_cancel)()) {
       result.reason = "MINCO optimization canceled during FINE";
       return result;
@@ -137,13 +142,14 @@ MincoOptimizer::Result MincoOptimizer::smooth(
   result.optimized_times = times;
 
   Trajectory<5> traj;
-  if (!buildTrajectory(points, times, traj)) {
+  if (!buildTrajectory(points, times, traj, initial_velocity, initial_acceleration)) {
     result.reason = "buildTrajectory failed";
     return result;
   }
   std::string dyn_diag;
   if (!enforceDynamicFeasibility(
-      points, times, traj, result.max_velocity, result.max_acceleration, &dyn_diag))
+      points, times, traj, result.max_velocity, result.max_acceleration, &dyn_diag,
+      initial_velocity, initial_acceleration))
   {
     result.reason = "dynamic feasibility reallocation failed: " + dyn_diag;
     return result;
@@ -476,7 +482,9 @@ void MincoOptimizer::smoothSegmentTimes(Eigen::VectorXd & times) const
 bool MincoOptimizer::enforceDynamicFeasibility(
   const std::vector<Eigen::Vector3d> & points, Eigen::VectorXd & times,
   Trajectory<5> & traj, double & max_velocity, double & max_acceleration,
-  std::string * diagnostic) const
+  std::string * diagnostic,
+  const Eigen::Vector3d * initial_velocity,
+  const Eigen::Vector3d * initial_acceleration) const
 {
   if (points.size() < 2 || times.size() != static_cast<int>(points.size()) - 1) {
     if (diagnostic) {
@@ -565,7 +573,7 @@ bool MincoOptimizer::enforceDynamicFeasibility(
         std::max(options_.min_segment_time, capped_time));
     }
     ++applied_iters;
-    if (!buildTrajectory(points, times, traj)) {
+    if (!buildTrajectory(points, times, traj, initial_velocity, initial_acceleration)) {
       if (diagnostic) {
         *diagnostic = "buildTrajectory failed after realloc iters=" +
           std::to_string(applied_iters);
@@ -594,7 +602,7 @@ bool MincoOptimizer::enforceDynamicFeasibility(
     if (!changed) {
       break;
     }
-    if (!buildTrajectory(points, times, traj)) {
+    if (!buildTrajectory(points, times, traj, initial_velocity, initial_acceleration)) {
       if (diagnostic) {
         *diagnostic = "buildTrajectory failed after global stretch iters=" +
           std::to_string(global_stretch_iters + 1);
@@ -625,7 +633,9 @@ bool MincoOptimizer::enforceDynamicFeasibility(
 
 bool MincoOptimizer::buildReferenceTrajectory(
   const nav_msgs::msg::Path & input, Result & result, nav_msgs::msg::Path & output,
-  std::string * diagnostic) const
+  std::string * diagnostic,
+  const Eigen::Vector3d * initial_velocity,
+  const Eigen::Vector3d * initial_acceleration) const
 {
   GuidePath guide;
   if (!buildGuidePath(input, guide)) {
@@ -641,14 +651,15 @@ bool MincoOptimizer::buildReferenceTrajectory(
   }
 
   Trajectory<5> traj;
-  if (!buildTrajectory(points, times, traj)) {
+  if (!buildTrajectory(points, times, traj, initial_velocity, initial_acceleration)) {
     if (diagnostic) {*diagnostic = "buildTrajectory failed";}
     return false;
   }
 
   std::string dyn_diag;
   if (!enforceDynamicFeasibility(
-      points, times, traj, result.max_velocity, result.max_acceleration, &dyn_diag))
+      points, times, traj, result.max_velocity, result.max_acceleration, &dyn_diag,
+      initial_velocity, initial_acceleration))
   {
     if (diagnostic) {*diagnostic = dyn_diag;}
     return false;
@@ -672,7 +683,9 @@ int MincoOptimizer::optimizeWaypoints(
   const std::vector<DynamicObstacle> * dynamic_obstacles,
   double w_energy, double w_reference, double w_obstacle,
   int max_iterations, double & final_cost, bool is_fine_stage,
-  const std::function<bool()> * should_cancel) const
+  const std::function<bool()> * should_cancel,
+  const Eigen::Vector3d * initial_velocity,
+  const Eigen::Vector3d * initial_acceleration) const
 {
   if (points.size() < 3) {return -1;}
   if (should_cancel && (*should_cancel)()) {return lbfgs::LBFGS_CANCELED;}
@@ -704,6 +717,8 @@ int MincoOptimizer::optimizeWaypoints(
   data.w_obstacle = w_obstacle;
   data.dynamic_obstacles = dynamic_obstacles;
   data.should_cancel = should_cancel;
+  data.initial_velocity = initial_velocity;
+  data.initial_acceleration = initial_acceleration;
   data.is_fine_stage = is_fine_stage;
   data.n_pts = n_pts;
 
@@ -746,7 +761,8 @@ void MincoOptimizer::setBoundaryStates(
   const std::vector<Eigen::Vector3d> &,
   Eigen::Matrix3d & head_state,
   Eigen::Matrix3d & tail_state,
-  const Eigen::Vector3d * head_vel_override) const
+  const Eigen::Vector3d * head_vel_override,
+  const Eigen::Vector3d * head_acc_override) const
 {
   head_state = Eigen::Matrix3d::Zero();
   tail_state = Eigen::Matrix3d::Zero();
@@ -755,20 +771,25 @@ void MincoOptimizer::setBoundaryStates(
   if (head_vel_override) {
     head_state.col(1) = *head_vel_override;
   }
+  if (head_acc_override) {
+    head_state.col(2) = *head_acc_override;
+  }
   // Nav2 NavigateToPose goals are stop goals. Keep this consistent with the
   // controller-side trajectory rebuild from MincoTrajectory messages.
 }
 
 bool MincoOptimizer::buildTrajectory(
   const std::vector<Eigen::Vector3d> & points, const Eigen::VectorXd & times,
-  Trajectory<5> & traj) const
+  Trajectory<5> & traj,
+  const Eigen::Vector3d * initial_velocity,
+  const Eigen::Vector3d * initial_acceleration) const
 {
   if (points.size() < 2 || times.size() != static_cast<int>(points.size()) - 1) {
     return false;
   }
   const int piece_num = static_cast<int>(points.size()) - 1;
   Eigen::Matrix3d head_state, tail_state;
-  setBoundaryStates(points, points, head_state, tail_state);
+  setBoundaryStates(points, points, head_state, tail_state, initial_velocity, initial_acceleration);
   Eigen::Matrix3Xd inner_points(3, std::max(0, piece_num - 1));
   for (int i = 1; i < piece_num; ++i) {
     inner_points.col(i - 1) = points[static_cast<size_t>(i)];
@@ -876,7 +897,9 @@ double MincoOptimizer::evaluateObjective(
 
   const int piece_num = static_cast<int>(points.size()) - 1;
   Eigen::Matrix3d head_state, tail_state;
-  setBoundaryStates(points, *data.reference_points, head_state, tail_state);
+  setBoundaryStates(
+    points, *data.reference_points, head_state, tail_state,
+    data.initial_velocity, data.initial_acceleration);
 
   Eigen::Matrix3Xd inner_points(3, std::max(0, piece_num - 1));
   for (int i = 1; i < piece_num; ++i) {

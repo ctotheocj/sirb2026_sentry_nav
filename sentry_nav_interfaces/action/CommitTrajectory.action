@@ -1,5 +1,6 @@
 sentry_nav_interfaces/MincoTrajectory candidate_minco
 bool allow_keep_active_on_reject
+bool prefer_keep_active
 ---
 bool accepted
 bool active_valid

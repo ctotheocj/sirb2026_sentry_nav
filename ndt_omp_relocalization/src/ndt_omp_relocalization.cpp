@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <sstream>
 
 #include "pcl/common/transforms.h"
 #include "pcl_conversions/pcl_conversions.h"
@@ -41,6 +42,23 @@ static double normalizeAngle(double a)
   while (a > M_PI) a -= 2.0 * M_PI;
   while (a < -M_PI) a += 2.0 * M_PI;
   return a;
+}
+
+static std::string boolString(bool value)
+{
+  return value ? "true" : "false";
+}
+
+static std::string numberString(double value)
+{
+  std::ostringstream out;
+  out << value;
+  return out.str();
+}
+
+static std::string intString(int value)
+{
+  return std::to_string(value);
 }
 
 // ---------------------------------------------------------------------------
@@ -234,6 +252,9 @@ NdtOmpRelocalizationNode::NdtOmpRelocalizationNode(const rclcpp::NodeOptions & o
   initial_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
     "initialpose", 10,
     std::bind(&NdtOmpRelocalizationNode::initialPoseCallback, this, std::placeholders::_1));
+  diagnostics_pub_ =
+    this->create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
+    "ndt_omp_relocalization/diagnostics", rclcpp::QoS(1));
 
   // --- Timers ---------------------------------------------------------------
   register_timer_ = this->create_wall_timer(
@@ -411,6 +432,83 @@ bool NdtOmpRelocalizationNode::evaluateAlignmentQuality(
          metrics.p90_residual <= quality_max_p90_residual_;
 }
 
+void NdtOmpRelocalizationNode::updateDiagnosticsState(
+  const std::string & state,
+  bool jump_rejected,
+  double fitness,
+  int source_points,
+  int filtered_points,
+  const QualityMetrics & metrics)
+{
+  diagnostics_state_ = state;
+  diagnostics_jump_rejected_ = jump_rejected;
+  diagnostics_fitness_ = fitness;
+  diagnostics_source_points_ = source_points;
+  diagnostics_filtered_points_ = filtered_points;
+  diagnostics_quality_ = metrics;
+}
+
+void NdtOmpRelocalizationNode::publishDiagnostics(const std::string & tf_mode)
+{
+  if (!diagnostics_pub_) {
+    return;
+  }
+
+  diagnostic_msgs::msg::DiagnosticArray array;
+  array.header.stamp = this->now();
+  diagnostic_msgs::msg::DiagnosticStatus status;
+  status.name = this->get_name();
+  status.hardware_id = "ndt_omp_relocalization";
+
+  bool trusted = false;
+  bool converged = false;
+  std::string state;
+  bool jump_rejected = false;
+  double fitness = 0.0;
+  int source_points = 0;
+  int filtered_points = 0;
+  QualityMetrics metrics;
+  {
+    std::lock_guard<std::mutex> lock(pose_mutex_);
+    trusted = trust_ndt_ && converged_;
+    converged = converged_;
+    state = diagnostics_state_;
+    jump_rejected = diagnostics_jump_rejected_;
+    fitness = diagnostics_fitness_;
+    source_points = diagnostics_source_points_;
+    filtered_points = diagnostics_filtered_points_;
+    metrics = diagnostics_quality_;
+  }
+
+  status.level = trusted ? diagnostic_msgs::msg::DiagnosticStatus::OK :
+    diagnostic_msgs::msg::DiagnosticStatus::WARN;
+  status.message = trusted ? "trusted" : state;
+
+  auto add = [&](const std::string & key, const std::string & value) {
+      diagnostic_msgs::msg::KeyValue kv;
+      kv.key = key;
+      kv.value = value;
+      status.values.push_back(std::move(kv));
+    };
+
+  add("localization_state", state);
+  add("trusted", boolString(trusted));
+  add("converged", boolString(converged));
+  add("fitness", numberString(fitness));
+  add("overlap", numberString(metrics.overlap_ratio));
+  add("source_points", intString(source_points));
+  add("filtered_points", intString(filtered_points));
+  add("sampled_points", intString(metrics.sampled_points));
+  add("valid_correspondences", intString(metrics.valid_correspondences));
+  add("median_residual", numberString(metrics.median_residual));
+  add("p90_residual", numberString(metrics.p90_residual));
+  add("jump_rejected", boolString(jump_rejected));
+  add("tf_mode", tf_mode);
+
+  array.status.push_back(std::move(status));
+  diagnostics_pub_->publish(array);
+}
+
 // ---------------------------------------------------------------------------
 // Incoming scan accumulation
 // ---------------------------------------------------------------------------
@@ -443,8 +541,11 @@ void NdtOmpRelocalizationNode::registeredPcdCallback(
 // ---------------------------------------------------------------------------
 void NdtOmpRelocalizationNode::performRegistration()
 {
+  QualityMetrics empty_metrics;
   if (!map_ready_) {
     if (!setupGlobalMap()) {
+      std::lock_guard<std::mutex> lock(pose_mutex_);
+      updateDiagnosticsState("map_not_ready", false, -1.0, 0, 0, empty_metrics);
       return;
     }
   }
@@ -455,6 +556,8 @@ void NdtOmpRelocalizationNode::performRegistration()
   {
     std::lock_guard<std::mutex> lock(cloud_mutex_);
     if (accumulated_cloud_->empty()) {
+      std::lock_guard<std::mutex> pose_lock(pose_mutex_);
+      updateDiagnosticsState("waiting_for_scan", false, -1.0, 0, 0, empty_metrics);
       return;
     }
     cloud_stamp = latest_cloud_stamp_;
@@ -475,6 +578,9 @@ void NdtOmpRelocalizationNode::performRegistration()
     if (enable_roll_pitch_fix_) {
       consecutive_converged_count_ = 0;
     }
+    updateDiagnosticsState(
+      "source_cloud_too_small", false, -1.0,
+      static_cast<int>(cloud_to_process->points.size()), 0, empty_metrics);
     return;
   }
 
@@ -490,6 +596,9 @@ void NdtOmpRelocalizationNode::performRegistration()
       if (enable_roll_pitch_fix_) {
         consecutive_converged_count_ = 0;
       }
+      updateDiagnosticsState(
+        "scan_stale", false, -1.0,
+        static_cast<int>(cloud_to_process->points.size()), 0, empty_metrics);
       return;
     }
   }
@@ -511,6 +620,10 @@ void NdtOmpRelocalizationNode::performRegistration()
     if (enable_roll_pitch_fix_) {
       consecutive_converged_count_ = 0;
     }
+    updateDiagnosticsState(
+      "filtered_cloud_too_small", false, -1.0,
+      static_cast<int>(cloud_to_process->points.size()),
+      static_cast<int>(filtered_cloud->points.size()), empty_metrics);
     return;
   }
 
@@ -548,6 +661,10 @@ void NdtOmpRelocalizationNode::performRegistration()
       if (enable_roll_pitch_fix_) {
         consecutive_converged_count_ = 0;
       }
+      updateDiagnosticsState(
+        "quality_rejected", false, fitness_score,
+        static_cast<int>(cloud_to_process->points.size()),
+        static_cast<int>(filtered_cloud->points.size()), quality_metrics);
       return;
     }
 
@@ -559,6 +676,10 @@ void NdtOmpRelocalizationNode::performRegistration()
       converged_ = false;
       consecutive_converged_count_ = 0;
       trust_ndt_ = false;
+      updateDiagnosticsState(
+        "jump_rejected", true, fitness_score,
+        static_cast<int>(cloud_to_process->points.size()),
+        static_cast<int>(filtered_cloud->points.size()), quality_metrics);
     } else {
       result_t_ = previous_result_t_ = new_result;
       converged_ = true;
@@ -576,6 +697,10 @@ void NdtOmpRelocalizationNode::performRegistration()
         last_trusted_result_t_ = result_t_;
         has_last_trusted_result_ = true;
       }
+      updateDiagnosticsState(
+        trust_ndt_ ? "trusted" : "warming_up", false, fitness_score,
+        static_cast<int>(cloud_to_process->points.size()),
+        static_cast<int>(filtered_cloud->points.size()), quality_metrics);
 
       RCLCPP_DEBUG(this->get_logger(),
         "NDT converged. fitness: %.4f, iterations: %d, trusted: %s, "
@@ -595,6 +720,10 @@ void NdtOmpRelocalizationNode::performRegistration()
     if (enable_roll_pitch_fix_) {
       consecutive_converged_count_ = 0;
     }
+    updateDiagnosticsState(
+      ndt_converged ? "fitness_rejected" : "not_converged", false, fitness_score,
+      static_cast<int>(cloud_to_process->points.size()),
+      static_cast<int>(filtered_cloud->points.size()), empty_metrics);
   }
 }
 
@@ -629,6 +758,7 @@ void NdtOmpRelocalizationNode::publishTransform()
 {
   Eigen::Isometry3d final_pose;
   bool local_trusted = false;
+  std::string tf_mode;
 
   {
     std::lock_guard<std::mutex> lock(pose_mutex_);
@@ -636,21 +766,27 @@ void NdtOmpRelocalizationNode::publishTransform()
 
     if (local_trusted) {
       final_pose = result_t_;
+      tf_mode = "trusted";
     } else if (publish_tf_only_when_trusted_) {
       // Only publish when trusted — but we still need the map frame to exist,
       // so fall through to has_last_trusted_result_ check.
       if (has_last_trusted_result_) {
         final_pose = last_trusted_result_t_;
+        tf_mode = "last_trusted";
       } else {
         // No trusted result yet — still broadcast init_pose so map frame exists.
         final_pose = result_t_;
+        tf_mode = "init_pose";
       }
     } else if (freeze_tf_when_not_trusted_ && has_last_trusted_result_) {
       final_pose = last_trusted_result_t_;
+      tf_mode = "frozen_last_trusted";
     } else {
       // Fallback: always publish something so the map frame never disappears.
       final_pose = result_t_;
+      tf_mode = "raw_untrusted";
     }
+    diagnostics_tf_mode_ = tf_mode;
   }
 
   if (enable_roll_pitch_fix_ && !local_trusted) {
@@ -658,6 +794,7 @@ void NdtOmpRelocalizationNode::publishTransform()
   }
 
   broadcastTransform(final_pose);
+  publishDiagnostics(tf_mode);
 }
 
 // ---------------------------------------------------------------------------
@@ -721,6 +858,10 @@ void NdtOmpRelocalizationNode::initialPoseCallback(
     converged_ = true;
     trust_ndt_ = true;
     consecutive_converged_count_ = trust_ndt_threshold_;
+    QualityMetrics metrics;
+    updateDiagnosticsState(
+      "trusted", false, 0.0, diagnostics_source_points_,
+      diagnostics_filtered_points_, metrics);
   }
 
   // Broadcast immediately

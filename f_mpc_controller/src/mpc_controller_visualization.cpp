@@ -4,7 +4,7 @@
 
 namespace f_mpc_controller
 {
-void MpcController::publishLocalPath(const tf2::Transform &)
+void MpcController::publishLocalPath(const tf2::Transform & base_to_odom_tf)
 {
   // 按限频发布当前 MPC 参考路径，供可视化和下游速度同步模块使用。
   if (!local_path_pub_) return;
@@ -18,7 +18,15 @@ void MpcController::publishLocalPath(const tf2::Transform &)
   nav_msgs::msg::Path local_path;
   local_path.header.frame_id = costmap_ros_->getGlobalFrameID();
   local_path.header.stamp = now;
-  local_path.poses.reserve(ref.size());
+  local_path.poses.reserve(ref.size() + 1);
+
+  geometry_msgs::msg::PoseStamped robot_pose;
+  robot_pose.header = local_path.header;
+  robot_pose.pose.position.x = base_to_odom_tf.getOrigin().x();
+  robot_pose.pose.position.y = base_to_odom_tf.getOrigin().y();
+  robot_pose.pose.position.z = 0.0;
+  robot_pose.pose.orientation.w = 1.0;
+  local_path.poses.push_back(robot_pose);
 
   for (const auto & p : ref) {
     geometry_msgs::msg::PoseStamped lp;

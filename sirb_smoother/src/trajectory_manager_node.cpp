@@ -90,7 +90,10 @@ TrajectoryManagerNode::TrajectoryManagerNode(const rclcpp::NodeOptions & options
 
   traj_pub_ = create_publisher<sentry_nav_interfaces::msg::MincoTrajectory>(
     output_topic_, rclcpp::QoS(1));
-  status_pub_ = create_publisher<std_msgs::msg::String>("trajectory_manager/status", rclcpp::QoS(1));
+  status_pub_ = create_publisher<sentry_nav_interfaces::msg::TrajectoryStatus>(
+    "trajectory_manager/status", rclcpp::QoS(1));
+  status_text_pub_ = create_publisher<std_msgs::msg::String>(
+    "trajectory_manager/status_text", rclcpp::QoS(1));
   traj_sub_ = create_subscription<sentry_nav_interfaces::msg::MincoTrajectory>(
     input_topic_, rclcpp::QoS(1),
     std::bind(&TrajectoryManagerNode::trajectoryCallback, this, std::placeholders::_1));
@@ -229,6 +232,15 @@ void TrajectoryManagerNode::executeCommit(
   {
     std::lock_guard<std::mutex> lk(mutex_);
     const bool had_active = has_active_traj_;
+    if (goal->prefer_keep_active && had_active) {
+      transitionTo(State::REPLAN_PENDING, "candidate fallback prefers active trajectory");
+      result->active_valid = has_active_traj_;
+      result->trajectory_id = active_traj_.trajectory_id;
+      result->accepted = false;
+      result->reason = "fallback candidate ignored, active kept";
+      goal_handle->succeed(result);
+      return;
+    }
     if (!had_active) {
       if (require_odom_ && !has_odom_) {
         transitionTo(State::REPLAN_PENDING, "initial trajectory waiting for odom");
@@ -804,7 +816,27 @@ void TrajectoryManagerNode::publishActiveTrajectory(const rclcpp::Time & stamp)
 
 void TrajectoryManagerNode::publishStatus(const rclcpp::Time & stamp, const char * reason)
 {
-  if (!status_pub_) {
+  if (!status_pub_ && !status_text_pub_) {
+    return;
+  }
+  if (status_pub_) {
+    sentry_nav_interfaces::msg::TrajectoryStatus status;
+    status.header.stamp = stamp;
+    status.header.frame_id = has_active_traj_ ? active_traj_.header.frame_id : "";
+    status.state = stateName(state_);
+    status.active = has_active_traj_;
+    status.emergency_stop = state_ == State::EMERGENCY_STOP && has_emergency_stop_;
+    status.trajectory_id = active_traj_.trajectory_id;
+    status.goal_id = active_goal_id_;
+    status.projected_time = last_projected_time_;
+    status.duration = has_active_traj_ ? trajectoryDuration(active_traj_) :
+      (has_emergency_stop_ ? trajectoryDuration(emergency_stop_traj_) : 0.0);
+    status.reason = reason;
+    status.last_transition = last_transition_reason_;
+    status_pub_->publish(status);
+  }
+
+  if (!status_text_pub_) {
     return;
   }
   std_msgs::msg::String msg;
@@ -819,7 +851,7 @@ void TrajectoryManagerNode::publishStatus(const rclcpp::Time & stamp, const char
       << " reason=" << reason
       << " last_transition=" << last_transition_reason_;
   msg.data = out.str();
-  status_pub_->publish(msg);
+  status_text_pub_->publish(msg);
 }
 
 void TrajectoryManagerNode::publishEmergencyStop(const rclcpp::Time & stamp, const char * reason)
@@ -832,12 +864,24 @@ void TrajectoryManagerNode::publishEmergencyStop(const rclcpp::Time & stamp, con
   const int64_t start_ns = stamp.nanoseconds();
   stop.start_time.sec = static_cast<int32_t>(start_ns / 1000000000LL);
   stop.start_time.nanosec = static_cast<uint32_t>(start_ns % 1000000000LL);
-  stop.segment_times.push_back(std::max(0.05, emergency_stop_duration_sec_));
+  stop.segment_times.push_back(std::max(1.0, emergency_stop_duration_sec_));
 
   geometry_msgs::msg::Point p;
   bool have_stop_point = false;
+  if (has_odom_ && !stop.header.frame_id.empty()) {
+    sentry_nav_interfaces::msg::MincoTrajectory frame_msg;
+    frame_msg.header.frame_id = stop.header.frame_id;
+    Eigen::Vector3d pos;
+    Eigen::Vector3d vel;
+    if (getOdomStateInTrajectoryFrame(frame_msg, pos, vel)) {
+      p.x = pos.x();
+      p.y = pos.y();
+      p.z = pos.z();
+      have_stop_point = true;
+    }
+  }
   Trajectory<5> traj;
-  if (has_active_traj_ && buildTrajectory(active_traj_, traj)) {
+  if (!have_stop_point && has_active_traj_ && buildTrajectory(active_traj_, traj)) {
     const double t = std::clamp(last_projected_time_, 0.0, trajectoryDuration(active_traj_));
     const auto pos = traj.getPos(t);
     p.x = pos.x();
@@ -855,6 +899,12 @@ void TrajectoryManagerNode::publishEmergencyStop(const rclcpp::Time & stamp, con
 
   stop.waypoints.push_back(p);
   stop.waypoints.push_back(p);
+  stop.initial_velocity.x = 0.0;
+  stop.initial_velocity.y = 0.0;
+  stop.initial_velocity.z = 0.0;
+  stop.initial_acceleration.x = 0.0;
+  stop.initial_acceleration.y = 0.0;
+  stop.initial_acceleration.z = 0.0;
   emergency_stop_traj_ = stop;
   has_emergency_stop_ = true;
   traj_pub_->publish(stop);

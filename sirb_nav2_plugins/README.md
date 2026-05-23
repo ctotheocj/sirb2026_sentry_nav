@@ -49,8 +49,8 @@ The layer also exposes `<layer_name>/set_semantic_layer_mode`
 For hole passing the layer has two mechanisms:
 
 - `clear_hole_corridors` removes dynamic occupancy-grid cells inside configured hole corridors
-  during normal navigation and hole-pass navigation. The corridor is the convex hull of the two
-  configured port polygons plus `clear_hole_margin`.
+  during normal navigation and hole-pass navigation. The corridor is the axis-aligned envelope
+  rectangle of all points from the two configured port polygons, expanded by `clear_hole_margin`.
 - The semantic mode service suppresses the whole online occupancy-grid layer while the robot is
   physically lowered in `hole_pass` mode. Static map layers stay active.
 
@@ -69,6 +69,7 @@ edit the hole polygons only in the `hole_pass.holes` block.
 | `clear_hole_corridors` | `false` | Filter occupied cells inside configured hole corridors |
 | `clear_hole_frame` | `map` | Frame of `clear_holes.*` polygons |
 | `clear_hole_margin` | `0.15` | Extra clearance around each generated corridor polygon |
+| `clear_hole_max_area` | `0.0` | Optional maximum generated envelope area in m^2; `0.0` disables the guard |
 | `clear_hole_ids` | `[]` | Hole ids injected from `bt_navigator.hole_pass.hole_ids` by launch |
 | `clear_holes.<id>.port_a_polygon` | `[]` | Injected port A polygon for corridor filtering |
 | `clear_holes.<id>.port_b_polygon` | `[]` | Injected port B polygon for corridor filtering |

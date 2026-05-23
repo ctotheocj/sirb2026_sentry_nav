@@ -11,6 +11,7 @@
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "sentry_nav_interfaces/action/commit_trajectory.hpp"
 #include "sentry_nav_interfaces/msg/minco_trajectory.hpp"
+#include "sentry_nav_interfaces/msg/trajectory_status.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
@@ -118,7 +119,8 @@ private:
   rclcpp::Subscription<nav2_msgs::msg::Costmap>::SharedPtr costmap_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr navigation_mode_sub_;
   rclcpp::Publisher<sentry_nav_interfaces::msg::MincoTrajectory>::SharedPtr traj_pub_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
+  rclcpp::Publisher<sentry_nav_interfaces::msg::TrajectoryStatus>::SharedPtr status_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_text_pub_;
   rclcpp_action::Server<CommitTrajectory>::SharedPtr commit_action_server_;
   rclcpp::TimerBase::SharedPtr publish_timer_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;

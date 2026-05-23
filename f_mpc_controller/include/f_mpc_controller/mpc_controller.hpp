@@ -194,6 +194,9 @@ private:
   std::vector<double> path_accumulated_dist_;
   double path_total_dist_{0.0};
   double current_s_{0.0};
+  double reference_total_dist_{0.0};
+  double reference_current_s_{0.0};
+  bool reference_distance_valid_{false};
   double last_ux = 0.0;
   double last_uy = 0.0;
 

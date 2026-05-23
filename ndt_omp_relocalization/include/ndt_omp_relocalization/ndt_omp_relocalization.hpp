@@ -17,9 +17,13 @@
 
 #include <memory>
 #include <mutex>
+#include <limits>
 #include <string>
 #include <vector>
 
+#include "diagnostic_msgs/msg/diagnostic_array.hpp"
+#include "diagnostic_msgs/msg/diagnostic_status.hpp"
+#include "diagnostic_msgs/msg/key_value.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "pcl/io/pcd_io.h"
 #include "pcl/filters/voxel_grid.h"
@@ -64,12 +68,21 @@ private:
     const pcl::PointCloud<pcl::PointXYZ>::Ptr & source,
     const Eigen::Isometry3d & map_to_odom,
     QualityMetrics & metrics) const;
+  void updateDiagnosticsState(
+    const std::string & state,
+    bool jump_rejected,
+    double fitness,
+    int source_points,
+    int filtered_points,
+    const QualityMetrics & metrics);
+  void publishDiagnostics(const std::string & tf_mode);
 
   /// Extract yaw from an Eigen rotation matrix (no tf2 conversion overhead).
   static double getYaw(const Eigen::Matrix3d & rot);
 
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pcd_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr initial_pose_sub_;
+  rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_pub_;
 
   // NDT parameters
   int num_threads_;
@@ -124,6 +137,14 @@ private:
   double quality_min_overlap_ratio_;
   double quality_max_median_residual_;
   double quality_max_p90_residual_;
+
+  std::string diagnostics_state_{"initializing"};
+  std::string diagnostics_tf_mode_{"none"};
+  double diagnostics_fitness_{std::numeric_limits<double>::infinity()};
+  QualityMetrics diagnostics_quality_;
+  int diagnostics_source_points_{0};
+  int diagnostics_filtered_points_{0};
+  bool diagnostics_jump_rejected_{false};
 
   std::mutex cloud_mutex_;
   std::mutex pose_mutex_;

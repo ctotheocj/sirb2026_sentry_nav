@@ -28,9 +28,9 @@
 #include "nav_msgs/msg/path.hpp"
 #include "nav2_msgs/msg/costmap.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
-#include "std_msgs/msg/string.hpp"
 #include "tf2_ros/buffer.h"
 
+#include "sentry_nav_interfaces/msg/trajectory_status.hpp"
 #include "sentry_nav_interfaces/msg/tracked_obstacle_array.hpp"
 #include "sentry_nav_interfaces/msg/timestamped_path.hpp"
 
@@ -161,8 +161,8 @@ private:
   std::string ts_path_topic_;
 
   // TrajectoryManager status. This distinguishes a blackboard path from an executable MINCO trajectory.
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr trajectory_status_sub_;
-  std::string latest_trajectory_status_;
+  rclcpp::Subscription<sentry_nav_interfaces::msg::TrajectoryStatus>::SharedPtr trajectory_status_sub_;
+  sentry_nav_interfaces::msg::TrajectoryStatus latest_trajectory_status_;
   std::chrono::steady_clock::time_point latest_trajectory_status_time_;
   bool have_trajectory_status_{false};
   mutable std::mutex trajectory_status_mutex_;

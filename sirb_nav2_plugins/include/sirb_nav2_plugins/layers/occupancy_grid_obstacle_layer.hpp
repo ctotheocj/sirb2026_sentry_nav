@@ -62,7 +62,6 @@ private:
   std::vector<Point2D> buildCorridorPolygon(
     const std::vector<double> & port_a,
     const std::vector<double> & port_b) const;
-  std::vector<Point2D> convexHull(std::vector<Point2D> points) const;
   CellArea boundsForPolygon(const std::vector<Point2D> & polygon, double margin) const;
   bool transformClearZonesToCostmapFrame(std::vector<ClearZone> & zones) const;
   ClearZone transformClearZone(
@@ -76,7 +75,6 @@ private:
   bool pointInPolygon(const Point2D & point, const std::vector<Point2D> & polygon) const;
   double distanceToPolygon(const Point2D & point, const std::vector<Point2D> & polygon) const;
   double distanceToSegment(const Point2D & point, const Point2D & a, const Point2D & b) const;
-  double cross(const Point2D & origin, const Point2D & a, const Point2D & b) const;
   CellArea cellAreaFromGrid(
     const nav_msgs::msg::MapMetaData & info, unsigned int x, unsigned int y) const;
   bool lookupTransformToCostmapFrame(
@@ -101,6 +99,7 @@ private:
   bool stamp_source_cell_area_;
   bool clear_hole_corridors_{false};
   double clear_hole_margin_{0.15};
+  double clear_hole_max_area_{0.0};
   bool debug_logging_;
   std::string topic_;
   std::string clear_hole_frame_{"map"};

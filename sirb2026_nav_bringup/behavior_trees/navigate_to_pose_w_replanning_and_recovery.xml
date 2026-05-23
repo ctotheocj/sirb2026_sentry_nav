@@ -3,6 +3,12 @@
   <BehaviorTree ID="MainTree">
     <RecoveryNode name="NavigateRecovery" number_of_retries="8">
       <PipelineSequence name="NavigateWithReplanning">
+        <LocalizationReady diagnostics_topics="ndt_omp_relocalization/diagnostics"
+                           max_age="0.8"
+                           required_ready_ticks="1"
+                           required_state="trusted"
+                           require_trusted="true"
+                           allow_missing_diagnostics="false"/>
         <HolePassModeController global_frame="map"
                                 robot_frame="gimbal_yaw_fake"
                                 param_prefix="hole_pass"
@@ -32,11 +38,14 @@
                 <GenerateMincoCandidate server_timeout="1000" input_path="{candidate_path}"
                                         smoothed_path="{candidate_smooth_path}"
                                         candidate_minco="{candidate_minco}"
+                                        product_type="{candidate_product_type}"
+                                        prefer_keep_active="{candidate_prefer_keep_active}"
                                         smoother_id="safe_geometric_smoother"
                                         server_name="safe_geometric_smoother/generate_minco_candidate"
-                                        max_smoothing_duration="0.2"/>
+                                        max_smoothing_duration="0.4"/>
                 <CommitTrajectory server_timeout="1000" candidate_path="{candidate_smooth_path}"
                                   candidate_minco="{candidate_minco}"
+                                  prefer_keep_active="{candidate_prefer_keep_active}"
                                   tracking_path="{tracking_path}"
                                   server_name="trajectory_manager/commit_trajectory"
                                   allow_keep_active_on_reject="true"/>
@@ -57,11 +66,14 @@
                   <GenerateMincoCandidate server_timeout="1000" input_path="{candidate_path}"
                                           smoothed_path="{candidate_smooth_path}"
                                           candidate_minco="{candidate_minco}"
+                                          product_type="{candidate_product_type}"
+                                          prefer_keep_active="{candidate_prefer_keep_active}"
                                           smoother_id="safe_geometric_smoother"
                                           server_name="safe_geometric_smoother/generate_minco_candidate"
-                                          max_smoothing_duration="0.2"/>
+                                          max_smoothing_duration="0.4"/>
                   <CommitTrajectory server_timeout="1000" candidate_path="{candidate_smooth_path}"
                                     candidate_minco="{candidate_minco}"
+                                    prefer_keep_active="{candidate_prefer_keep_active}"
                                     tracking_path="{tracking_path}"
                                     server_name="trajectory_manager/commit_trajectory"
                                     allow_keep_active_on_reject="false"/>
@@ -96,11 +108,14 @@
             <GenerateMincoCandidate server_timeout="1000" input_path="{candidate_path}"
                                     smoothed_path="{candidate_smooth_path}"
                                     candidate_minco="{candidate_minco}"
+                                    product_type="{candidate_product_type}"
+                                    prefer_keep_active="{candidate_prefer_keep_active}"
                                     smoother_id="safe_geometric_smoother"
                                     server_name="safe_geometric_smoother/generate_minco_candidate"
-                                    max_smoothing_duration="0.2"/>
+                                    max_smoothing_duration="0.4"/>
             <CommitTrajectory server_timeout="1000" candidate_path="{candidate_smooth_path}"
                               candidate_minco="{candidate_minco}"
+                              prefer_keep_active="{candidate_prefer_keep_active}"
                               tracking_path="{tracking_path}"
                               server_name="trajectory_manager/commit_trajectory"
                               allow_keep_active_on_reject="false"/>
@@ -116,11 +131,14 @@
             <GenerateMincoCandidate server_timeout="1000" input_path="{candidate_path}"
                                     smoothed_path="{candidate_smooth_path}"
                                     candidate_minco="{candidate_minco}"
+                                    product_type="{candidate_product_type}"
+                                    prefer_keep_active="{candidate_prefer_keep_active}"
                                     smoother_id="safe_geometric_smoother"
                                     server_name="safe_geometric_smoother/generate_minco_candidate"
-                                    max_smoothing_duration="0.2"/>
+                                    max_smoothing_duration="0.4"/>
             <CommitTrajectory server_timeout="1000" candidate_path="{candidate_smooth_path}"
                               candidate_minco="{candidate_minco}"
+                              prefer_keep_active="{candidate_prefer_keep_active}"
                               tracking_path="{tracking_path}"
                               server_name="trajectory_manager/commit_trajectory"
                               allow_keep_active_on_reject="false"/>

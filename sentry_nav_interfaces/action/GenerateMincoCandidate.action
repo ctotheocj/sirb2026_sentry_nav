@@ -6,6 +6,8 @@ bool success
 nav_msgs/Path smoothed_path
 sentry_nav_interfaces/MincoTrajectory candidate_minco
 string reason
+string product_type
+bool prefer_keep_active
 builtin_interfaces/Duration smoothing_duration
 ---
 string state

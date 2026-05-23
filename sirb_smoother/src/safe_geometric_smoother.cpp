@@ -5,12 +5,14 @@
 #include <cmath>
 #include <limits>
 #include <mutex>
+#include <sstream>
 
 #include "angles/angles.h"
 #include "nav2_costmap_2d/cost_values.hpp"
 #include "nav2_util/node_utils.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "tf2/LinearMath/Quaternion.h"
+#include "tf2/LinearMath/Vector3.h"
 #include "tf2/utils.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
@@ -185,6 +187,26 @@ bool smoothedGeometryReasonable(
   return true;
 }
 
+std::string productTypeToString(int value)
+{
+  switch (value) {
+    case 1:
+      return "optimized_minco";
+    case 2:
+      return "cached_minco";
+    case 3:
+      return "timeout_reference_fallback";
+    case 4:
+      return "collision_fallback";
+    case 5:
+      return "geometry_fallback";
+    case 6:
+      return "path_fallback";
+    default:
+      return "none";
+  }
+}
+
 }  // namespace
 
 void SafeGeometricSmoother::setEsdf(plan_env::GridMap::Ptr esdf)
@@ -279,6 +301,12 @@ void SafeGeometricSmoother::configure(  const rclcpp_lifecycle::LifecycleNode::W
   decl("stitch_cache_timeout", 4.0);
   decl("reuse_cached_trajectory_on_minco_failure", false);
   decl("allow_reference_fallback_on_bad_geometry", false);
+  // Initial state for nonzero-velocity replanning.
+  decl("use_odom_initial_state", true);
+  decl("odom_topic", std::string("odometry"));
+  decl("odom_max_age_sec", 0.25);
+  decl("odom_twist_in_child_frame", true);
+  decl("initial_velocity_max", 0.0);
   // MPC output
   decl("publish_trajectory_for_mpc", false);
   // Collision
@@ -362,6 +390,11 @@ void SafeGeometricSmoother::configure(  const rclcpp_lifecycle::LifecycleNode::W
   get("stitch_cache_timeout", stitch_cache_timeout_);
   get("reuse_cached_trajectory_on_minco_failure", reuse_cached_trajectory_on_minco_failure_);
   get("allow_reference_fallback_on_bad_geometry", allow_reference_fallback_on_bad_geometry_);
+  get("use_odom_initial_state", use_odom_initial_state_);
+  get("odom_topic", odom_topic_);
+  get("odom_max_age_sec", odom_max_age_sec_);
+  get("odom_twist_in_child_frame", odom_twist_in_child_frame_);
+  get("initial_velocity_max", initial_velocity_max_);
   get("publish_trajectory_for_mpc", publish_trajectory_for_mpc_);
   get("use_footprint_collision_check", use_footprint_collision_check_);
   int fp_ct = static_cast<int>(footprint_collision_cost_threshold_);
@@ -375,6 +408,8 @@ void SafeGeometricSmoother::configure(  const rclcpp_lifecycle::LifecycleNode::W
   minco_options_.enabled = use_minco_;
   minco_options_.allow_unknown = allow_unknown_;
   min_clearance_for_removal_ = std::max(0.0, min_clearance_for_removal_);
+  odom_max_age_sec_ = std::max(0.0, odom_max_age_sec_);
+  initial_velocity_max_ = std::max(0.0, initial_velocity_max_);
   minco_optimizer_.setOptions(minco_options_);
 
   if (minco_options_.v_ref > minco_options_.v_max) {
@@ -412,6 +447,12 @@ void SafeGeometricSmoother::configure(  const rclcpp_lifecycle::LifecycleNode::W
           std::lock_guard<std::mutex> lk(dynamic_obs_mutex_);
           dynamic_obstacles_ = std::move(obs);
         });
+  }
+
+  if (use_odom_initial_state_) {
+    odom_sub_ = node->create_subscription<nav_msgs::msg::Odometry>(
+      odom_topic_, rclcpp::QoS(10),
+      std::bind(&SafeGeometricSmoother::odomCallback, this, std::placeholders::_1));
   }
 
   if (debug_publish_) {
@@ -464,6 +505,7 @@ void SafeGeometricSmoother::configure(  const rclcpp_lifecycle::LifecycleNode::W
 void SafeGeometricSmoother::cleanup()
 {
   generate_action_server_.reset();
+  odom_sub_.reset();
   costmap_sub_.reset();
   footprint_sub_.reset();
   tf_.reset();
@@ -495,11 +537,104 @@ bool SafeGeometricSmoother::acquireEsdfMap(const char * reason, bool warn_on_fai
   if (warn_on_failure) {
     RCLCPP_WARN(
       logger_,
-      "%s: use_esdf=true but GridMapRegistry is empty during %s. "
+    "%s: use_esdf=true but GridMapRegistry is empty during %s. "
       "Ensure plan_env::GridMapComponent is loaded in the same composable container.",
       name_.c_str(), reason);
   }
   return false;
+}
+
+void SafeGeometricSmoother::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
+{
+  std::lock_guard<std::mutex> lk(odom_mutex_);
+  latest_odom_ = *msg;
+  has_odom_ = true;
+}
+
+SafeGeometricSmoother::InitialState SafeGeometricSmoother::getInitialStateInFrame(
+  const std_msgs::msg::Header & target_header) const
+{
+  InitialState state;
+  if (!use_odom_initial_state_) {
+    state.reason = "disabled";
+    return state;
+  }
+
+  nav_msgs::msg::Odometry odom;
+  {
+    std::lock_guard<std::mutex> lk(odom_mutex_);
+    if (!has_odom_) {
+      state.reason = "no odom";
+      return state;
+    }
+    odom = latest_odom_;
+  }
+
+  const rclcpp::Time now = clock_ ? clock_->now() : rclcpp::Clock().now();
+  const rclcpp::Time stamp(odom.header.stamp);
+  try {
+    state.age = (now - stamp).seconds();
+  } catch (const std::runtime_error &) {
+    state.reason = "time source mismatch";
+    return state;
+  }
+  if (state.age > odom_max_age_sec_) {
+    std::ostringstream out;
+    out << "stale odom age=" << state.age;
+    state.reason = out.str();
+    return state;
+  }
+
+  std::string odom_frame = odom.header.frame_id;
+  std::string twist_frame = odom_twist_in_child_frame_ && !odom.child_frame_id.empty() ?
+    odom.child_frame_id : odom_frame;
+  std::string target_frame = target_header.frame_id;
+  if (target_frame.empty()) {
+    target_frame = odom_frame;
+  }
+  if (odom_frame.empty() || twist_frame.empty() || target_frame.empty()) {
+    state.reason = "missing frame";
+    return state;
+  }
+
+  tf2::Vector3 v(
+    odom.twist.twist.linear.x,
+    odom.twist.twist.linear.y,
+    odom.twist.twist.linear.z);
+
+  try {
+    if (twist_frame != odom_frame) {
+      const auto child_to_odom = tf_->lookupTransform(
+        odom_frame, twist_frame, tf2::TimePointZero,
+        tf2::durationFromSec(0.02));
+      const auto & q_msg = child_to_odom.transform.rotation;
+      const tf2::Quaternion q(q_msg.x, q_msg.y, q_msg.z, q_msg.w);
+      v = tf2::Matrix3x3(q) * v;
+    }
+    if (target_frame != odom_frame) {
+      const auto odom_to_target = tf_->lookupTransform(
+        target_frame, odom_frame, tf2::TimePointZero,
+        tf2::durationFromSec(0.02));
+      const auto & q_msg = odom_to_target.transform.rotation;
+      const tf2::Quaternion q(q_msg.x, q_msg.y, q_msg.z, q_msg.w);
+      v = tf2::Matrix3x3(q) * v;
+    }
+  } catch (const tf2::TransformException & ex) {
+    state.reason = ex.what();
+    return state;
+  }
+
+  state.velocity = Eigen::Vector3d(v.x(), v.y(), v.z());
+  state.acceleration = Eigen::Vector3d::Zero();
+  state.speed = state.velocity.head<2>().norm();
+  if (initial_velocity_max_ > 1.0e-3 && state.speed > initial_velocity_max_) {
+    state.velocity.head<2>() *= initial_velocity_max_ / std::max(state.speed, 1.0e-6);
+    state.speed = initial_velocity_max_;
+  }
+  state.valid = std::isfinite(state.velocity.x()) && std::isfinite(state.velocity.y()) &&
+    std::isfinite(state.velocity.z());
+  state.reason = state.valid ? "ok" : "nonfinite velocity";
+  return state;
 }
 
 bool SafeGeometricSmoother::buildSafeReferenceFallback(
@@ -509,11 +644,16 @@ bool SafeGeometricSmoother::buildSafeReferenceFallback(
   const Footprint & footprint,
   MincoOptimizer::Result & result,
   nav_msgs::msg::Path & candidate,
-  std::string & diagnostic) const
+  std::string & diagnostic,
+  const Eigen::Vector3d * initial_velocity,
+  const Eigen::Vector3d * initial_acceleration) const
 {
   diagnostic.clear();
   candidate = reference_path;
-  if (!minco_optimizer_.buildReferenceTrajectory(reference_path, result, candidate, &diagnostic)) {
+  if (!minco_optimizer_.buildReferenceTrajectory(
+      reference_path, result, candidate, &diagnostic,
+      initial_velocity, initial_acceleration))
+  {
     if (diagnostic.empty()) {
       diagnostic = "reference trajectory build failed";
     }
@@ -623,10 +763,12 @@ void SafeGeometricSmoother::executeGenerateCandidate(
     static_cast<uint32_t>(duration_ns % 1000000000LL);
   result->smoothed_path = candidate;
   result->candidate_minco = minco_msg;
+  result->product_type = last_candidate_product_type_;
+  result->prefer_keep_active = last_candidate_prefer_keep_active_;
   result->success =
     ok && minco_msg.waypoints.size() >= 2 && !minco_msg.segment_times.empty();
   if (result->success) {
-    result->reason = "candidate generated";
+    result->reason = "candidate generated: " + result->product_type;
     goal_handle->succeed(result);
   } else {
     result->reason = ok ? "smoother produced no MINCO candidate" : "candidate generation failed";
@@ -835,6 +977,7 @@ bool SafeGeometricSmoother::tryReuseCachedTrajectory(
 
   if (cached_path.poses.size() < 2) {
     cached_reuse_waypoints_.clear();
+    cached_reuse_times_.resize(0);
     return false;
   }
 
@@ -843,6 +986,8 @@ bool SafeGeometricSmoother::tryReuseCachedTrajectory(
     cached_reuse_times_(static_cast<Eigen::Index>(i - 1)) =
       std::max(0.05, sample_times[i] - sample_times[i - 1]);
   }
+  cached_reuse_initial_velocity_ = cached_traj_.getVel(best_t);
+  cached_reuse_initial_acceleration_ = cached_traj_.getAcc(best_t);
 
   RCLCPP_WARN_THROTTLE(
     logger_, *clock_, 1000,
@@ -859,14 +1004,20 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
 
   enum class LocalTrajectoryProduct
   {
-    NONE,
-    NEW_MINCO,
-    CACHED_MINCO,
+    NONE = 0,
+    OPTIMIZED_MINCO = 1,
+    CACHED_MINCO = 2,
+    TIMEOUT_REFERENCE_FALLBACK = 3,
+    COLLISION_FALLBACK = 4,
+    GEOMETRY_FALLBACK = 5,
+    PATH_FALLBACK = 6,
   };
 
   const nav_msgs::msg::Path input_path = path;
   const PathMetrics m_in = computePathMetrics(input_path);
   LocalTrajectoryProduct product = LocalTrajectoryProduct::NONE;
+  last_candidate_product_type_ = "none";
+  last_candidate_prefer_keep_active_ = false;
 
   if (debug_publish_ && input_path_pub_) {input_path_pub_->publish(input_path);}
 
@@ -892,6 +1043,11 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
   nav_msgs::msg::Path candidate = input_path;
   nav_msgs::msg::Path minco_reference_path = input_path;
   MincoOptimizer::Result minco_result;
+  InitialState initial_state;
+  Eigen::Vector3d initial_velocity = Eigen::Vector3d::Zero();
+  Eigen::Vector3d initial_acceleration = Eigen::Vector3d::Zero();
+  const Eigen::Vector3d * initial_vel = nullptr;
+  const Eigen::Vector3d * initial_acc = nullptr;
 
   if (use_minco_) {
     if (minco_options_.use_esdf && !acquireEsdfMap("smooth", false)) {
@@ -912,6 +1068,24 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
 
     // 尝试把旧轨迹可执行前段拼接到新候选路径。
     const bool stitched = enable_stitching_ && tryStitchPath(minco_reference_path);
+    initial_state = getInitialStateInFrame(minco_reference_path.header);
+    if (initial_state.valid) {
+      initial_velocity = initial_state.velocity;
+      initial_acceleration = initial_state.acceleration;
+      initial_vel = &initial_velocity;
+      initial_acc = &initial_acceleration;
+    }
+    if (initial_state.valid) {
+      RCLCPP_INFO_THROTTLE(
+        logger_, *clock_, 1000,
+        "MINCO initial state from odom: speed=%.2fm/s age=%.3fs frame='%s'",
+        initial_state.speed, initial_state.age, minco_reference_path.header.frame_id.c_str());
+    } else {
+      RCLCPP_WARN_THROTTLE(
+        logger_, *clock_, 3000,
+        "MINCO initial state unavailable, using zero velocity: %s",
+        initial_state.reason.c_str());
+    }
 
     std::vector<DynamicObstacle> local_obs;
     {
@@ -933,7 +1107,8 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
 
     nav_msgs::msg::Path minco_candidate = minco_reference_path;
     minco_result = minco_optimizer_.smooth(
-      minco_reference_path, minco_candidate, costmap.get(), obs_ptr, &should_cancel);
+      minco_reference_path, minco_candidate, costmap.get(), obs_ptr, &should_cancel,
+      initial_vel, initial_acc);
     const double minco_ms = (clock_->now() - start_time).nanoseconds() * 1.0e-6;
 
     if (should_cancel()) {
@@ -950,11 +1125,11 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
       std::string fallback_diag;
       if (buildSafeReferenceFallback(
           minco_reference_path, minco_reference_path, *costmap, footprint,
-          reference_result, reference_candidate, fallback_diag))
+          reference_result, reference_candidate, fallback_diag, initial_vel, initial_acc))
       {
         candidate = reference_candidate;
         minco_result = reference_result;
-        product = LocalTrajectoryProduct::NEW_MINCO;
+        product = LocalTrajectoryProduct::TIMEOUT_REFERENCE_FALLBACK;
         RCLCPP_INFO_THROTTLE(
           logger_,
           *clock_,
@@ -970,19 +1145,25 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
       }
     }
 
-    if (minco_result.success && product != LocalTrajectoryProduct::NEW_MINCO) {
+    if (minco_result.success && product == LocalTrajectoryProduct::NONE) {
       candidate = minco_candidate;
-      product = LocalTrajectoryProduct::NEW_MINCO;
+      product = LocalTrajectoryProduct::OPTIMIZED_MINCO;
     }
 
-    if (product == LocalTrajectoryProduct::NEW_MINCO) {
+    if (product == LocalTrajectoryProduct::OPTIMIZED_MINCO ||
+      product == LocalTrajectoryProduct::TIMEOUT_REFERENCE_FALLBACK)
+    {
       if (minco_result.success) {
         RCLCPP_INFO_THROTTLE(
           logger_, *clock_, 1000,
-          "MINCO ok: stitch=%d pre=%d fine=%d dur=%.2fs max_v=%.2f max_a=%.2f time=%.1fms",
-          stitched, minco_result.pre_ret, minco_result.fine_ret,
+          "MINCO product=%s: stitch=%d init_v=%.2f pre=%d fine=%d dur=%.2fs "
+          "max_v=%.2f max_a=%.2f time=%.1fms waypoints=%zu",
+          productTypeToString(static_cast<int>(product)).c_str(), stitched,
+          minco_result.initial_velocity.head<2>().norm(),
+          minco_result.pre_ret, minco_result.fine_ret,
           minco_result.traj_duration, minco_result.max_velocity,
-          minco_result.max_acceleration, minco_ms);
+          minco_result.max_acceleration, minco_ms,
+          minco_result.optimized_waypoints.size());
       }
 
       if (debug_publish_ && minco_waypoints_pub_) {
@@ -1003,7 +1184,7 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
             candidate = shortcutPath(input_path, *costmap, footprint, start_time, max_time);
           }
           if (do_resample_) {candidate = resamplePath(candidate);}
-          product = LocalTrajectoryProduct::NONE;
+          product = LocalTrajectoryProduct::PATH_FALLBACK;
         } else {
           return false;
         }
@@ -1022,16 +1203,19 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
     const auto col = collectCollisionPoses(candidate, *costmap, footprint);
     RCLCPP_WARN(logger_, "Smoothed path rejected: %zu collision(s)", col.size());
     if (debug_publish_) {publishRejectedPath(candidate); publishCollisionMarkers(col, candidate.header);}
-    if (product == LocalTrajectoryProduct::NEW_MINCO) {
+    if (product == LocalTrajectoryProduct::OPTIMIZED_MINCO ||
+      product == LocalTrajectoryProduct::TIMEOUT_REFERENCE_FALLBACK)
+    {
       MincoOptimizer::Result reference_result;
       nav_msgs::msg::Path reference_candidate;
       std::string fallback_diag;
       if (buildSafeReferenceFallback(
           minco_reference_path, minco_reference_path, *costmap, footprint,
-          reference_result, reference_candidate, fallback_diag))
+          reference_result, reference_candidate, fallback_diag, initial_vel, initial_acc))
       {
         candidate = reference_candidate;
         minco_result = reference_result;
+        product = LocalTrajectoryProduct::COLLISION_FALLBACK;
         RCLCPP_WARN(
           logger_,
           "MINCO collision fallback accepted: reference trajectory dur=%.2fs "
@@ -1052,11 +1236,14 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
         updateOrientations(cached_candidate);
         path = cached_candidate;
         if (debug_publish_ && output_path_pub_) {output_path_pub_->publish(path);}
+        last_candidate_minco_ = makeCachedMpcTrajectory(path.header);
+        has_last_candidate_minco_ =
+          last_candidate_minco_.waypoints.size() >= 2 &&
+          !last_candidate_minco_.segment_times.empty();
+        last_candidate_product_type_ =
+          productTypeToString(static_cast<int>(LocalTrajectoryProduct::CACHED_MINCO));
+        last_candidate_prefer_keep_active_ = true;
         if (publish_trajectory_for_mpc_ && mpc_traj_pub_) {
-          last_candidate_minco_ = makeCachedMpcTrajectory(path.header);
-          has_last_candidate_minco_ =
-            last_candidate_minco_.waypoints.size() >= 2 &&
-            !last_candidate_minco_.segment_times.empty();
           if (has_last_candidate_minco_) {
             mpc_traj_pub_->publish(last_candidate_minco_);
           }
@@ -1068,13 +1255,18 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
     if (fallback_to_input_path_) {
       path = input_path;
       if (debug_publish_ && output_path_pub_) {output_path_pub_->publish(input_path);}
+      last_candidate_product_type_ = productTypeToString(static_cast<int>(LocalTrajectoryProduct::PATH_FALLBACK));
+      last_candidate_prefer_keep_active_ = true;
       return true;
     }
     return false;
     }
   }
 
-  if (product == LocalTrajectoryProduct::NEW_MINCO) {
+  if (product == LocalTrajectoryProduct::OPTIMIZED_MINCO ||
+    product == LocalTrajectoryProduct::TIMEOUT_REFERENCE_FALLBACK ||
+    product == LocalTrajectoryProduct::COLLISION_FALLBACK)
+  {
     std::string geometry_reason;
     if (!smoothedGeometryReasonable(input_path, candidate, geometry_reason)) {
       const auto m_candidate = pathGeometryMetrics(candidate);
@@ -1097,10 +1289,11 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
       std::string fallback_diag;
       if (buildSafeReferenceFallback(
           minco_reference_path, minco_reference_path, *costmap, footprint,
-          reference_result, reference_candidate, fallback_diag))
+          reference_result, reference_candidate, fallback_diag, initial_vel, initial_acc))
       {
         candidate = reference_candidate;
         minco_result = reference_result;
+        product = LocalTrajectoryProduct::GEOMETRY_FALLBACK;
         RCLCPP_WARN(
           logger_,
           "MINCO geometry fallback accepted: reference trajectory dur=%.2fs "
@@ -1119,17 +1312,28 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
   if (debug_publish_ && output_path_pub_) {output_path_pub_->publish(candidate);}
 
   // Update trajectory cache and publish MPC trajectory only after safety check passes
-  if (product == LocalTrajectoryProduct::NEW_MINCO) {
+  if (product == LocalTrajectoryProduct::OPTIMIZED_MINCO ||
+    product == LocalTrajectoryProduct::TIMEOUT_REFERENCE_FALLBACK ||
+    product == LocalTrajectoryProduct::COLLISION_FALLBACK ||
+    product == LocalTrajectoryProduct::GEOMETRY_FALLBACK)
+  {
     if (minco_result.optimized_waypoints.size() >= 2 &&
       minco_result.optimized_times.size() > 0)
     {
       Trajectory<5> new_traj;
+      const Eigen::Vector3d init_v = minco_result.initial_velocity;
+      const Eigen::Vector3d init_a = minco_result.initial_acceleration;
       if (minco_optimizer_.buildTrajectory(
-          minco_result.optimized_waypoints, minco_result.optimized_times, new_traj))
+          minco_result.optimized_waypoints, minco_result.optimized_times, new_traj,
+          &init_v, &init_a))
       {
         cached_traj_ = new_traj;
         cached_waypoints_ = minco_result.optimized_waypoints;
         cached_times_ = minco_result.optimized_times;
+        cached_initial_velocity_ = init_v;
+        cached_initial_acceleration_ = init_a;
+        cached_reuse_waypoints_.clear();
+        cached_reuse_times_.resize(0);
         cached_traj_stamp_ = clock_->now();
         has_cached_traj_ = true;
       }
@@ -1141,6 +1345,11 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
     if (publish_trajectory_for_mpc_ && mpc_traj_pub_ && has_last_candidate_minco_) {
       mpc_traj_pub_->publish(last_candidate_minco_);
     }
+    last_candidate_product_type_ = productTypeToString(static_cast<int>(product));
+    last_candidate_prefer_keep_active_ =
+      product == LocalTrajectoryProduct::TIMEOUT_REFERENCE_FALLBACK ||
+      product == LocalTrajectoryProduct::COLLISION_FALLBACK ||
+      product == LocalTrajectoryProduct::GEOMETRY_FALLBACK;
   } else if (product == LocalTrajectoryProduct::CACHED_MINCO && has_cached_traj_)
   {
     last_candidate_minco_ = makeCachedMpcTrajectory(path.header);
@@ -1150,6 +1359,11 @@ bool SafeGeometricSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Dur
     if (publish_trajectory_for_mpc_ && mpc_traj_pub_ && has_last_candidate_minco_) {
       mpc_traj_pub_->publish(last_candidate_minco_);
     }
+    last_candidate_product_type_ = productTypeToString(static_cast<int>(product));
+    last_candidate_prefer_keep_active_ = true;
+  } else if (product == LocalTrajectoryProduct::PATH_FALLBACK) {
+    last_candidate_product_type_ = productTypeToString(static_cast<int>(product));
+    last_candidate_prefer_keep_active_ = true;
   }
 
   const PathMetrics m_out = computePathMetrics(candidate);
@@ -1497,12 +1711,17 @@ sentry_nav_interfaces::msg::MincoTrajectory SafeGeometricSmoother::makeCachedMpc
   for (Eigen::Index i = 0; i < times.size(); ++i) {
     msg.segment_times.push_back(times(i));
   }
-  msg.initial_velocity.x = 0.0;
-  msg.initial_velocity.y = 0.0;
-  msg.initial_velocity.z = 0.0;
-  msg.initial_acceleration.x = 0.0;
-  msg.initial_acceleration.y = 0.0;
-  msg.initial_acceleration.z = 0.0;
+  const bool using_reuse = cached_reuse_waypoints_.size() >= 2;
+  const Eigen::Vector3d init_v =
+    using_reuse ? cached_reuse_initial_velocity_ : cached_initial_velocity_;
+  const Eigen::Vector3d init_a =
+    using_reuse ? cached_reuse_initial_acceleration_ : cached_initial_acceleration_;
+  msg.initial_velocity.x = init_v.x();
+  msg.initial_velocity.y = init_v.y();
+  msg.initial_velocity.z = init_v.z();
+  msg.initial_acceleration.x = init_a.x();
+  msg.initial_acceleration.y = init_a.y();
+  msg.initial_acceleration.z = init_a.z();
   return msg;
 }
 

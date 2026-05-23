@@ -125,18 +125,26 @@ public:
     const nav_msgs::msg::Path & input, nav_msgs::msg::Path & output,
     const nav2_costmap_2d::Costmap2D * costmap = nullptr,
     const std::vector<DynamicObstacle> * dynamic_obstacles = nullptr,
-    const std::function<bool()> * should_cancel = nullptr) const;
+    const std::function<bool()> * should_cancel = nullptr,
+    const Eigen::Vector3d * initial_velocity = nullptr,
+    const Eigen::Vector3d * initial_acceleration = nullptr) const;
 
   bool buildTrajectory(
     const std::vector<Eigen::Vector3d> & points, const Eigen::VectorXd & times,
-    Trajectory<5> & traj) const;
+    Trajectory<5> & traj,
+    const Eigen::Vector3d * initial_velocity = nullptr,
+    const Eigen::Vector3d * initial_acceleration = nullptr) const;
   bool buildReferenceTrajectory(
     const nav_msgs::msg::Path & input, Result & result, nav_msgs::msg::Path & output,
-    std::string * diagnostic = nullptr) const;
+    std::string * diagnostic = nullptr,
+    const Eigen::Vector3d * initial_velocity = nullptr,
+    const Eigen::Vector3d * initial_acceleration = nullptr) const;
   bool enforceDynamicFeasibility(
     const std::vector<Eigen::Vector3d> & points, Eigen::VectorXd & times,
     Trajectory<5> & traj, double & max_velocity, double & max_acceleration,
-    std::string * diagnostic = nullptr) const;
+    std::string * diagnostic = nullptr,
+    const Eigen::Vector3d * initial_velocity = nullptr,
+    const Eigen::Vector3d * initial_acceleration = nullptr) const;
 
 private:
   struct GuidePath
@@ -165,6 +173,8 @@ private:
     double w_obstacle{2.0};
     const std::vector<DynamicObstacle> * dynamic_obstacles{nullptr};
     const std::function<bool()> * should_cancel{nullptr};
+    const Eigen::Vector3d * initial_velocity{nullptr};
+    const Eigen::Vector3d * initial_acceleration{nullptr};
     bool is_fine_stage{false};
     int n_pts{0};
   };
@@ -186,7 +196,9 @@ private:
     const std::vector<DynamicObstacle> * dynamic_obstacles,
     double w_energy, double w_reference, double w_obstacle,
     int max_iterations, double & final_cost, bool is_fine_stage = false,
-    const std::function<bool()> * should_cancel = nullptr) const;
+    const std::function<bool()> * should_cancel = nullptr,
+    const Eigen::Vector3d * initial_velocity = nullptr,
+    const Eigen::Vector3d * initial_acceleration = nullptr) const;
   double evaluateObjective(
     const Eigen::VectorXd & x, Eigen::VectorXd & grad,
     const OptimizationData & data) const;
@@ -212,7 +224,8 @@ private:
     const std::vector<Eigen::Vector3d> & ref_points,
     Eigen::Matrix3d & head_state,
     Eigen::Matrix3d & tail_state,
-    const Eigen::Vector3d * head_vel_override = nullptr) const;
+    const Eigen::Vector3d * head_vel_override = nullptr,
+    const Eigen::Vector3d * head_acc_override = nullptr) const;
   double segmentTime(
     const Eigen::Vector3d & prev, const Eigen::Vector3d & current,
     const Eigen::Vector3d & next) const;

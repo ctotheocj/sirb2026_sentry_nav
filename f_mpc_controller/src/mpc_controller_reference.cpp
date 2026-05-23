@@ -205,6 +205,9 @@ double MpcController::updateMincoProjection(
 void MpcController::fillTerminalMincoReference(const MincoReferenceContext & ctx)
 {
   // 轨迹接近结束时将整个预测窗口固定到终点，并把参考速度置零。
+  reference_current_s_ = 0.0;
+  reference_total_dist_ = 0.0;
+  reference_distance_valid_ = true;
   Eigen::Vector3d goal_pos = ctx.traj.getPos(ctx.traj_dur);
   tf2::Vector3 goal_odom = ctx.map_to_odom *
     tf2::Vector3(goal_pos.x(), goal_pos.y(), goal_pos.z());
@@ -246,8 +249,9 @@ void MpcController::sampleMincoHorizon(
       arc_remaining[static_cast<size_t>(idx)] =
         arc_remaining[static_cast<size_t>(idx + 1)] + (p1 - p0).head<2>().norm();
     }
-    current_s_ = 0.0;
-    path_total_dist_ = arc_remaining.empty() ? 0.0 : arc_remaining.front();
+    reference_current_s_ = 0.0;
+    reference_total_dist_ = arc_remaining.empty() ? 0.0 : arc_remaining.front();
+    reference_distance_valid_ = true;
   }
   auto remainingDistanceAt = [&](double t) {
       if (arc_times.empty()) {
@@ -333,6 +337,9 @@ void MpcController::samplePathFallback(double r_x, double r_y, double ref_time_s
     }
   }
   current_s_ = std::clamp(start_dist, 0.0, path_total_dist_);
+  reference_current_s_ = current_s_;
+  reference_total_dist_ = path_total_dist_;
+  reference_distance_valid_ = true;
 
   size_t plan_idx = target_index_;
   const double goal_x = global_plan_odom_.poses.back().pose.position.x;
@@ -485,6 +492,9 @@ void MpcController::generateReferenceTrajectory(const tf2::Transform & base_to_o
   double ref_time_scale = computeReferenceTimeScale();
   last_ref_time_scale_ = std::clamp(ref_time_scale, 0.05, 1.0);
   last_min_curvature_speed_limit_ = v_ref_max_effective_;
+  reference_current_s_ = current_s_;
+  reference_total_dist_ = path_total_dist_;
+  reference_distance_valid_ = !global_plan_odom_.poses.empty();
 
   if (sampleMincoReference(r_x, r_y, ref_time_scale)) {
     reference_uses_minco_ = true;

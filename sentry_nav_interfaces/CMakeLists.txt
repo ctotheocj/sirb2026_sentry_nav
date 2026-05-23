@@ -18,6 +18,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/TrackedObstacleArray.msg"
   "msg/TimestampedPath.msg"
   "msg/MincoTrajectory.msg"
+  "msg/TrajectoryStatus.msg"
   "msg/HolePassCmd.msg"
   "srv/GetNavigationMode.srv"
   "srv/SetNavigationMode.srv"

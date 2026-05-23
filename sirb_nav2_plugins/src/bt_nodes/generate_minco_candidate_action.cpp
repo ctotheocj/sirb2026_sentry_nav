@@ -68,11 +68,14 @@ BT::NodeStatus GenerateMincoCandidateAction::on_success()
   }
 
   setOutput("reason", result->reason);
+  setOutput("product_type", result->product_type);
+  setOutput("prefer_keep_active", result->prefer_keep_active);
   RCLCPP_DEBUG(
     node_->get_logger(),
-    "GenerateMincoCandidate: result success=%d path_poses=%zu minco_waypoints=%zu "
-    "minco_segments=%zu reason='%s'",
-    result->success, result->smoothed_path.poses.size(),
+    "GenerateMincoCandidate: result success=%d product='%s' prefer_keep_active=%d "
+    "path_poses=%zu minco_waypoints=%zu minco_segments=%zu reason='%s'",
+    result->success, result->product_type.c_str(), result->prefer_keep_active,
+    result->smoothed_path.poses.size(),
     result->candidate_minco.waypoints.size(), result->candidate_minco.segment_times.size(),
     result->reason.c_str());
 

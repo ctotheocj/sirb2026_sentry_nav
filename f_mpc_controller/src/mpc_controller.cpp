@@ -872,7 +872,11 @@ void MpcController::applyGoalStopProtection(
 {
   // 在接近终点时根据剩余距离限制速度，并在真正到达终端参考后强制停稳。
   auto node = node_.lock();
-  double dist_to_goal_protect = std::max(0.0, path_total_dist_ - current_s_);
+  const double reference_remaining =
+    reference_distance_valid_ ?
+    (reference_total_dist_ - reference_current_s_) :
+    (path_total_dist_ - current_s_);
+  double dist_to_goal_protect = std::max(0.0, reference_remaining);
   const double ref0_dist_for_goal = ref.empty() ?
     std::numeric_limits<double>::infinity() :
     std::hypot(ref.front().x - r_x, ref.front().y - r_y);
@@ -883,8 +887,9 @@ void MpcController::applyGoalStopProtection(
       RCLCPP_WARN_THROTTLE(
         node->get_logger(), *clock_, 500,
         "Goal stop protection zeroed cmd: dist_to_goal=%.3f threshold=%.3f ref0_dist=%.2f "
-        "current_s=%.2f total=%.2f",
-        dist_to_goal_protect, goal_stop_distance_, ref0_dist_for_goal, current_s_, path_total_dist_);
+        "ref_s=%.2f ref_total=%.2f path_s=%.2f path_total=%.2f",
+        dist_to_goal_protect, goal_stop_distance_, ref0_dist_for_goal,
+        reference_current_s_, reference_total_dist_, current_s_, path_total_dist_);
     }
     cmd.twist.linear.x = 0.0;
     cmd.twist.linear.y = 0.0;
@@ -1044,12 +1049,13 @@ geometry_msgs::msg::TwistStamped MpcController::computeVelocityCommands(
       "MPC solve diag: success=%d status=%d u=(%.3f, %.3f) ref0_dist=%.2f ref0_v=%.2f "
       "speed_limit=[%.2f, %.2f] curv_min=%.2f time_scale=%.2f "
       "cmd_last=(%.2f, %.2f) odom_vel=(%.2f, %.2f) anchor=(%.2f, %.2f) anchor_valid=%d "
-      "current_s=%.2f total=%.2f active_obs=%d",
+      "ref_s=%.2f ref_total=%.2f ref_valid=%d path_s=%.2f path_total=%.2f active_obs=%d",
       solve.success ? 1 : 0, static_cast<int>(solve.status), u.vx, u.vy,
       ref0_dist_diag, ref0_speed_diag, min_limit_diag, max_limit_diag,
       last_min_curvature_speed_limit_, last_ref_time_scale_,
       last_ux, last_uy, measured_velocity_raw_x_, measured_velocity_raw_y_,
       velocity_anchor_x_, velocity_anchor_y_, current_velocity_anchor_valid_ ? 1 : 0,
+      reference_current_s_, reference_total_dist_, reference_distance_valid_ ? 1 : 0,
       current_s_, path_total_dist_, active_count);
   }
 

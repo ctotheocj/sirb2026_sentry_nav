@@ -40,6 +40,10 @@ public:
         BT::OutputPort<sentry_nav_interfaces::msg::MincoTrajectory>(
           "candidate_minco", "Candidate MINCO trajectory"),
         BT::OutputPort<std::string>("reason", "Candidate generation decision reason"),
+        BT::OutputPort<std::string>("product_type", "Generated trajectory product type"),
+        BT::OutputPort<bool>(
+          "prefer_keep_active",
+          "True when this candidate is a degraded fallback and should not replace valid active trajectory"),
       });
   }
 };
