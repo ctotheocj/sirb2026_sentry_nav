@@ -50,6 +50,7 @@ find_package(visualization_msgs REQUIRED)
 find_package(pcl_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(tf2_eigen REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(livox_ros_driver2 REQUIRED)
 find_package(Eigen3 REQUIRED)
@@ -88,14 +89,15 @@ add_executable(pointlio_mapping
 ament_target_dependencies(pointlio_mapping
   rclcpp
   rclpy
-  geometry_msgs
   diagnostic_msgs
+  geometry_msgs
   nav_msgs
   sensor_msgs
   visualization_msgs
   pcl_ros
   pcl_conversions
   tf2_eigen
+  tf2_geometry_msgs
   tf2_ros
   livox_ros_driver2
 )
@@ -118,13 +120,14 @@ install(
 ament_export_dependencies(
   rclcpp
   rclpy
-  geometry_msgs
   diagnostic_msgs
+  geometry_msgs
   nav_msgs
   sensor_msgs
   pcl_ros
   pcl_conversions
   tf2_eigen
+  tf2_geometry_msgs
   tf2_ros
   livox_ros_driver2
   Eigen3

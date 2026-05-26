@@ -24,7 +24,6 @@ ament_auto_add_library(sirb_nav2_plugins_nodes SHARED
   src/layers/occupancy_grid_obstacle_layer.cpp
   src/bt_nodes/select_nearby_goal.cpp
   src/bt_nodes/corridor_replan_condition.cpp
-  src/bt_nodes/localization_ready_condition.cpp
   src/bt_nodes/hole_pass_mode_controller.cpp
   src/bt_nodes/commit_trajectory_action.cpp
   src/bt_nodes/generate_minco_candidate_action.cpp

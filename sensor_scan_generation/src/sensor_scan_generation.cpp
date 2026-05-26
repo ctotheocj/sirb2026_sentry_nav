@@ -74,6 +74,10 @@ SensorScanGenerationNode::SensorScanGenerationNode(const rclcpp::NodeOptions & o
   pub_laser_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("sensor_scan", 2);
   pub_chassis_odometry_ = this->create_publisher<nav_msgs::msg::Odometry>("odometry", 2);
 
+  direct_odometry_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+    "lidar_odometry", rclcpp::SensorDataQoS(),
+    std::bind(&SensorScanGenerationNode::odometryHandler, this, std::placeholders::_1));
+
   rmw_qos_profile_t qos_profile = {
     RMW_QOS_POLICY_HISTORY_KEEP_LAST,
     1,
@@ -100,18 +104,53 @@ void SensorScanGenerationNode::laserCloudAndOdometryHandler(
   const nav_msgs::msg::Odometry::ConstSharedPtr & odometry_msg,
   const sensor_msgs::msg::PointCloud2::ConstSharedPtr & pcd_msg)
 {
+  tf2::Transform tf_odom_to_lidar;
+  tf2::fromMsg(odometry_msg->pose.pose, tf_odom_to_lidar);
+
+  sensor_msgs::msg::PointCloud2 out;
+  pcl_ros::transformPointCloud(lidar_frame_, tf_odom_to_lidar.inverse(), *pcd_msg, out);
+  pub_laser_cloud_->publish(out);
+}
+
+void SensorScanGenerationNode::odometryHandler(
+  const nav_msgs::msg::Odometry::ConstSharedPtr & odometry_msg)
+{
   tf2::Transform tf_lidar_to_chassis;
   tf2::Transform tf_odom_to_chassis;
   tf2::Transform tf_odom_to_robot_base;
   tf2::Transform tf_odom_to_lidar;
+  if (!buildBaseTransforms(
+      odometry_msg, odometry_msg->header.stamp, tf_odom_to_lidar, tf_lidar_to_chassis,
+      tf_odom_to_chassis, tf_odom_to_robot_base))
+  {
+    return;
+  }
+
+  publishTransform(
+    tf_odom_to_chassis, odometry_msg->header.frame_id, base_frame_, odometry_msg->header.stamp);
+  publishOdometry(
+    tf_odom_to_robot_base, tf_odom_to_chassis, odometry_msg->header.frame_id,
+    robot_base_frame_, odometry_msg->header.stamp);
+}
+
+bool SensorScanGenerationNode::buildBaseTransforms(
+  const nav_msgs::msg::Odometry::ConstSharedPtr & odometry_msg,
+  const rclcpp::Time & stamp,
+  tf2::Transform & tf_odom_to_lidar,
+  tf2::Transform & tf_lidar_to_chassis,
+  tf2::Transform & tf_odom_to_chassis_out,
+  tf2::Transform & tf_odom_to_robot_base_out)
+{
+  tf2::Transform tf_odom_to_chassis;
+  tf2::Transform tf_odom_to_robot_base;
 
   tf2::fromMsg(odometry_msg->pose.pose, tf_odom_to_lidar);
 
   if (!has_lidar_to_robot_base_ || !use_initial_lidar_to_base_transform_) {
-    if (getTransform(lidar_frame_, robot_base_frame_, pcd_msg->header.stamp, tf_lidar_to_robot_base_)) {
+    if (getTransform(lidar_frame_, robot_base_frame_, stamp, tf_lidar_to_robot_base_)) {
       has_lidar_to_robot_base_ = true;
     } else if (!has_lidar_to_robot_base_) {
-      return;
+      return false;
     } else {
       RCLCPP_WARN_THROTTLE(
         this->get_logger(), *this->get_clock(), 1000,
@@ -120,10 +159,10 @@ void SensorScanGenerationNode::laserCloudAndOdometryHandler(
   }
 
   if (!has_lidar_to_chassis_ || !use_initial_lidar_to_base_transform_) {
-    if (getTransform(lidar_frame_, base_frame_, pcd_msg->header.stamp, tf_lidar_to_chassis_)) {
+    if (getTransform(lidar_frame_, base_frame_, stamp, tf_lidar_to_chassis_)) {
       has_lidar_to_chassis_ = true;
     } else if (!has_lidar_to_chassis_) {
-      return;
+      return false;
     } else {
       RCLCPP_WARN_THROTTLE(
         this->get_logger(), *this->get_clock(), 1000,
@@ -135,21 +174,12 @@ void SensorScanGenerationNode::laserCloudAndOdometryHandler(
   tf_odom_to_chassis = tf_odom_to_lidar * tf_lidar_to_chassis;
   tf_odom_to_robot_base = tf_odom_to_lidar * tf_lidar_to_robot_base_;
 
-  const tf2::Transform tf_odom_to_chassis_out = makePlanarBaseTransform(tf_odom_to_chassis);
-  const tf2::Transform tf_odom_to_robot_base_out = makePlanarBaseTransform(tf_odom_to_robot_base);
+  tf_odom_to_chassis_out = makePlanarBaseTransform(tf_odom_to_chassis);
+  tf_odom_to_robot_base_out = makePlanarBaseTransform(tf_odom_to_robot_base);
 
   diagnoseOdomJump(
-    tf_odom_to_lidar, tf_lidar_to_chassis, tf_odom_to_chassis_out, pcd_msg->header.stamp);
-
-  publishTransform(
-    tf_odom_to_chassis_out, odometry_msg->header.frame_id, base_frame_, pcd_msg->header.stamp);
-  publishOdometry(
-    tf_odom_to_robot_base_out, tf_odom_to_chassis_out, odometry_msg->header.frame_id,
-    robot_base_frame_, pcd_msg->header.stamp);
-
-  sensor_msgs::msg::PointCloud2 out;
-  pcl_ros::transformPointCloud(lidar_frame_, tf_odom_to_lidar.inverse(), *pcd_msg, out);
-  pub_laser_cloud_->publish(out);
+    tf_odom_to_lidar, tf_lidar_to_chassis, tf_odom_to_chassis_out, stamp);
+  return true;
 }
 
 bool SensorScanGenerationNode::getTransform(

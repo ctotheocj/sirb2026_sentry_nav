@@ -42,6 +42,8 @@ private:
     const nav_msgs::msg::Odometry::ConstSharedPtr & odometry,
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr & laserCloud2);
 
+  void odometryHandler(const nav_msgs::msg::Odometry::ConstSharedPtr & odometry);
+
   bool getTransform(
     const std::string & target_frame, const std::string & source_frame, const rclcpp::Time & time,
     tf2::Transform & transform);
@@ -65,6 +67,14 @@ private:
   void diagnoseOdomJump(
     const tf2::Transform & tf_odom_to_lidar, const tf2::Transform & tf_lidar_to_chassis,
     const tf2::Transform & tf_odom_to_chassis, const rclcpp::Time & stamp);
+
+  bool buildBaseTransforms(
+    const nav_msgs::msg::Odometry::ConstSharedPtr & odometry_msg,
+    const rclcpp::Time & stamp,
+    tf2::Transform & tf_odom_to_lidar,
+    tf2::Transform & tf_lidar_to_chassis,
+    tf2::Transform & tf_odom_to_chassis_out,
+    tf2::Transform & tf_odom_to_robot_base_out);
 
   std::string lidar_frame_;
   std::string base_frame_;
@@ -94,6 +104,7 @@ private:
   std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
   std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
 
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr direct_odometry_sub_;
   message_filters::Subscriber<nav_msgs::msg::Odometry> odometry_sub_;
   message_filters::Subscriber<sensor_msgs::msg::PointCloud2> laser_cloud_sub_;
 

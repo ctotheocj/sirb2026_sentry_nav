@@ -6,7 +6,12 @@
 
 ## Branch: RM25_SMBU_auto_sentry
 
-- Feats: Prior pcd map input
+In this workspace Point-LIO is the default high-rate local odometry source. The optional
+`localization_backend:=point_lio_prior` mode loads a prior PCD into IVox, applies the configured
+`prior_pcd.init_pose` or `/initialpose`, keeps the prior map fixed by default, and publishes
+`point_lio/diagnostics` for the Nav2 `LocalizationReady` gate. Use that mode only with
+LiDAR-built prior maps that are known to work with Point-LIO scan-to-map residuals; CAD/STL
+derived prior maps use the default `small_gicp` backend.
 
 ## 1. Introduction
 

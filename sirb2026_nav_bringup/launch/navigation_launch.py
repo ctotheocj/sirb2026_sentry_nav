@@ -42,7 +42,6 @@ def generate_launch_description():
     use_respawn = LaunchConfiguration("use_respawn")
     log_level = LaunchConfiguration("log_level")
     slam = LaunchConfiguration("slam")
-    require_localization_ready = LaunchConfiguration("require_localization_ready")
 
     lifecycle_nodes = [
         "controller_server",
@@ -127,12 +126,6 @@ def generate_launch_description():
         description="Whether slam_launch is active. If true, slam_launch owns obstacle_scan.",
     )
 
-    declare_require_localization_ready_cmd = DeclareLaunchArgument(
-        "require_localization_ready",
-        default_value="True",
-        description="Keep LocalizationReady localization diagnostics gate in the default BT.",
-    )
-
     load_nodes = GroupAction(
         condition=IfCondition(PythonExpression(["not ", use_composition])),
         actions=[
@@ -168,16 +161,6 @@ def generate_launch_description():
                 parameters=[configured_params],
                 arguments=["--ros-args", "--log-level", log_level],
                 remappings=[("/tf", "tf"), ("/tf_static", "tf_static")],
-            ),
-            Node(
-                package="plan_env",
-                executable="grid_map_node",
-                name="grid_map_node",
-                output="screen",
-                respawn=use_respawn,
-                respawn_delay=2.0,
-                parameters=[configured_params],
-                arguments=["--ros-args", "--log-level", log_level],
             ),
             Node(
                 package="hole_pass_controller",
@@ -426,7 +409,6 @@ def generate_launch_description():
     ld.add_action(declare_use_respawn_cmd)
     ld.add_action(declare_log_level_cmd)
     ld.add_action(declare_slam_cmd)
-    ld.add_action(declare_require_localization_ready_cmd)
     ld.add_action(prepare_navigation_params_cmd)
     ld.add_action(load_nodes)
     ld.add_action(load_composable_nodes)

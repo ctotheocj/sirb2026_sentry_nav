@@ -31,7 +31,6 @@ def generate_launch_description():
     world                 = LaunchConfiguration("world")
     map_yaml_file         = LaunchConfiguration("map")
     prior_pcd_file        = LaunchConfiguration("prior_pcd_file")
-    localization_backend  = LaunchConfiguration("localization_backend")
     use_sim_time          = LaunchConfiguration("use_sim_time")
     params_file           = LaunchConfiguration("params_file")
     autostart             = LaunchConfiguration("autostart")
@@ -40,8 +39,6 @@ def generate_launch_description():
     rviz_config_file      = LaunchConfiguration("rviz_config_file")
     use_rviz              = LaunchConfiguration("use_rviz")
     use_yaw_fusion        = LaunchConfiguration("use_yaw_fusion")
-    use_dodge_manager     = LaunchConfiguration("use_dodge_manager")
-    require_localization_ready = LaunchConfiguration("require_localization_ready")
     use_tf_jump_monitor   = LaunchConfiguration("use_tf_jump_monitor")
     use_dynamic_obstacles = LaunchConfiguration("use_dynamic_obstacles")
 
@@ -70,15 +67,6 @@ def generate_launch_description():
             TextSubstitution(text=".pcd"),
         ],
     )
-    declare_localization_backend_cmd = DeclareLaunchArgument(
-        "localization_backend",
-        default_value="ndt",
-        description=(
-            "Localization backend: ndt keeps the existing simulation behavior; "
-            "point_lio_prior uses prior-map Point-LIO localization."
-        ),
-        choices=["point_lio_prior", "ndt"],
-    )
     declare_use_sim_time_cmd = DeclareLaunchArgument("use_sim_time", default_value="True")
     declare_params_file_cmd = DeclareLaunchArgument(
         "params_file",
@@ -93,23 +81,6 @@ def generate_launch_description():
     )
     declare_use_rviz_cmd = DeclareLaunchArgument("use_rviz", default_value="True")
     declare_use_yaw_fusion_cmd = DeclareLaunchArgument("use_yaw_fusion", default_value="False")
-    declare_use_dodge_manager_cmd = DeclareLaunchArgument(
-        "use_dodge_manager",
-        default_value="False",
-        description=(
-            "Launch dodge_manager and enable direct dodge cmd_vel output. "
-            "Keep False for the normal Nav2/MPC command chain."
-        ),
-    )
-    declare_require_localization_ready_cmd = DeclareLaunchArgument(
-        "require_localization_ready",
-        default_value="False",
-        description=(
-            "Keep the LocalizationReady diagnostics gate in the default BT. "
-            "Simulation defaults to False because NDT quality can be unavailable "
-            "while Point-LIO odometry is still usable."
-        ),
-    )
     declare_use_tf_jump_monitor_cmd = DeclareLaunchArgument(
         "use_tf_jump_monitor", default_value="True",
     )
@@ -154,11 +125,9 @@ def generate_launch_description():
             "prior_pcd_file":        prior_pcd_file,
             "use_sim_time":          use_sim_time,
             "params_file":           params_file,
-            "localization_backend":  localization_backend,
             "autostart":             autostart,
             "use_composition":       use_composition,
             "use_respawn":           use_respawn,
-            "require_localization_ready": require_localization_ready,
         }.items(),
     )
 
@@ -178,8 +147,7 @@ def generate_launch_description():
         name="dodge_manager",
         namespace=namespace,
         output="screen",
-        condition=IfCondition(use_dodge_manager),
-        parameters=[configured_params, {"enable_dodge": use_dodge_manager}],
+        parameters=[configured_params],
         remappings=[("/tf", "tf"), ("/tf_static", "tf_static")],
     )
 
@@ -237,6 +205,23 @@ def generate_launch_description():
         parameters=[configured_params],
     )
 
+    def _make_grid_map_node(context, *_):
+        # When using composition, GridMapComponent runs inside the container instead
+        if context.launch_configurations.get("use_composition", "False").lower() == "true":
+            return []
+        ns_val = context.launch_configurations["namespace"]
+        return [Node(
+            package="plan_env",
+            executable="grid_map_node",
+            name="grid_map_node",
+            namespace=ns_val,
+            output="screen",
+            parameters=[configured_params],
+        )]
+
+    start_grid_map_node_cmd = OpaqueFunction(function=_make_grid_map_node)
+
+
     joy_teleop_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(launch_dir, "joy_teleop_launch.py")),
         launch_arguments={
@@ -263,7 +248,6 @@ def generate_launch_description():
     ld.add_action(declare_world_cmd)
     ld.add_action(declare_map_yaml_cmd)
     ld.add_action(declare_prior_pcd_file_cmd)
-    ld.add_action(declare_localization_backend_cmd)
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_params_file_cmd)
     ld.add_action(declare_autostart_cmd)
@@ -272,8 +256,6 @@ def generate_launch_description():
     ld.add_action(declare_rviz_config_file_cmd)
     ld.add_action(declare_use_rviz_cmd)
     ld.add_action(declare_use_yaw_fusion_cmd)
-    ld.add_action(declare_use_dodge_manager_cmd)
-    ld.add_action(declare_require_localization_ready_cmd)
     ld.add_action(declare_use_tf_jump_monitor_cmd)
     ld.add_action(declare_use_dynamic_obstacles_cmd)
     ld.add_action(prepare_motion_profile_cmd)
@@ -281,6 +263,7 @@ def generate_launch_description():
     ld.add_action(start_velodyne_convert_tool)
     ld.add_action(start_lidar_preprocessor_node)
     ld.add_action(start_dynamic_point_detector_node)
+    ld.add_action(start_grid_map_node_cmd)
     ld.add_action(bringup_cmd)
     ld.add_action(start_yaw_fusion_node)
     ld.add_action(start_dodge_manager_node)

@@ -36,7 +36,7 @@
   <exec_depend>f_mpc_controller</exec_depend>
   <exec_depend>sirb_smoother</exec_depend>
 
-  <exec_depend>ndt_omp_relocalization</exec_depend>
+  <exec_depend>small_gicp_relocalization</exec_depend>
   <exec_depend>dodge_manager</exec_depend>
   <exec_depend>hole_pass_controller</exec_depend>
   <exec_depend>pointcloud_to_laserscan</exec_depend>

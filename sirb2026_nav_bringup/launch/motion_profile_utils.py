@@ -116,18 +116,9 @@ def apply_motion_profile_to_dict(data):
         float(smoother.get("minco_dynamic_realloc_max_segment_scale", 8.0)), 8.0)
     smoother["minco_max_segment_time"] = max(
         float(smoother.get("minco_max_segment_time", 4.0)), 4.0)
-    smoother["minco_max_pieces"] = int(smoother.get("minco_max_pieces", 32))
-    smoother["minco_max_waypoints"] = int(smoother.get("minco_max_waypoints", 16))
-    smoother["minco_waypoint_time_step"] = float(
-        smoother.get("minco_waypoint_time_step", 0.55))
-    smoother["minco_min_waypoint_spacing"] = float(
-        smoother.get("minco_min_waypoint_spacing", 0.25))
-    smoother["minco_local_horizon_distance"] = float(
-        smoother.get("minco_local_horizon_distance", 6.0))
-    smoother["minco_goal_stop_distance"] = float(
-        smoother.get("minco_goal_stop_distance", 0.8))
-    smoother["minco_terminal_pass_speed"] = float(
-        smoother.get("minco_terminal_pass_speed", max_speed))
+    smoother["minco_max_pieces"] = max(
+        int(smoother.get("minco_max_pieces", 60)), 60)
+    smoother["enable_trajectory_stitching"] = False
     smoother["reuse_cached_trajectory_on_minco_failure"] = False
 
     manager["publish_full_active_trajectory"] = True
@@ -215,21 +206,6 @@ def sync_hole_clear_corridors(data):
     return synced
 
 
-def apply_bt_tree_mode(data, slam_enabled, require_localization_ready):
-    if require_localization_ready and not slam_enabled:
-        return False
-    bt_nav = _node_params(data, "bt_navigator")
-    bt_nav["default_nav_to_pose_bt_xml"] = (
-        "$(find-pkg-share sirb2026_nav_bringup)/behavior_trees/"
-        "navigate_to_pose_slam_w_replanning_and_recovery.xml"
-    )
-    bt_nav["default_nav_through_poses_bt_xml"] = (
-        "$(find-pkg-share sirb2026_nav_bringup)/behavior_trees/"
-        "navigate_through_poses_slam_w_replanning_and_recovery.xml"
-    )
-    return True
-
-
 def _replace_robot_namespace_placeholders(text, namespace):
     ns = namespace.strip("/")
     replacement = f"/{ns}" if ns else ""
@@ -237,29 +213,20 @@ def _replace_robot_namespace_placeholders(text, namespace):
 
 
 def prepare_navigation_params(context, params_file_config, namespace_config=None):
+    if context.launch_configurations.get("_sirb2026_navigation_params_prepared") == "true":
+        return []
+
     source = context.perform_substitution(params_file_config)
     if namespace_config is not None:
         namespace = context.perform_substitution(namespace_config)
     else:
         namespace = context.launch_configurations.get("namespace", "")
 
-    if (
-        context.launch_configurations.get("_sirb2026_navigation_params_prepared") == "true"
-        and context.launch_configurations.get("_sirb2026_navigation_params_prepared_path") == source
-        and context.launch_configurations.get("_sirb2026_navigation_params_prepared_namespace") == namespace
-    ):
-        return []
-
     with open(source, "r") as f:
         text = f.read()
     text = _replace_robot_namespace_placeholders(text, namespace)
     data = yaml.safe_load(text)
     synced_clear_corridors = sync_hole_clear_corridors(data)
-    slam_enabled = _as_bool(context.launch_configurations.get("slam", False))
-    require_localization_ready = _as_bool(
-        context.launch_configurations.get("require_localization_ready", True))
-    selected_slam_bt = apply_bt_tree_mode(
-        data, slam_enabled, require_localization_ready)
 
     safe_ns = "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in namespace)
     fd, output = tempfile.mkstemp(
@@ -270,22 +237,16 @@ def prepare_navigation_params(context, params_file_config, namespace_config=None
 
     context.launch_configurations["params_file"] = output
     context.launch_configurations["_sirb2026_navigation_params_prepared"] = "true"
-    context.launch_configurations["_sirb2026_navigation_params_prepared_path"] = output
-    context.launch_configurations["_sirb2026_navigation_params_prepared_namespace"] = namespace
     print(f"[navigation_params] generated params: {output}")
     print(f"[navigation_params] hole_clear_corridors synced_layers={synced_clear_corridors}")
-    if selected_slam_bt:
-        print("[navigation_params] selected BT XML without LocalizationReady gate")
     return []
 
 
 def apply_launch_mode_guards(data, use_composition):
+    if use_composition:
+        return False
     smoother = _plugin_params(data, "smoother_server", "safe_geometric_smoother")
-    if (
-        use_composition
-        or not bool(smoother.get("minco_optimize_online", False))
-        or not bool(smoother.get("minco_use_esdf", False))
-    ):
+    if not bool(smoother.get("minco_use_esdf", False)):
         return False
     smoother["minco_use_esdf"] = False
     return True

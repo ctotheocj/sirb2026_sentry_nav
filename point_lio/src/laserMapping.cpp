@@ -1,20 +1,28 @@
 // #include <so3_math.h>
 #include <malloc.h>
+#include <diagnostic_msgs/msg/diagnostic_array.hpp>
+#include <diagnostic_msgs/msg/diagnostic_status.hpp>
+#include <diagnostic_msgs/msg/key_value.hpp>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <tf2_eigen/tf2_eigen.hpp>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/transform_broadcaster.h>
+#include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 
-#include <diagnostic_msgs/msg/diagnostic_array.hpp>
-#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
 
 #include <cstdint>
+#include <cmath>
+#include <algorithm>
+#include <limits>
+#include <sstream>
 
 #include "li_initialization.h"
 
@@ -31,18 +39,19 @@ int time_log_counter = 0;
 bool init_map = false, flg_first_scan = true;
 bool prior_map_loaded = false;
 bool initial_pose_applied = false;
-bool initial_pose_pending = false;
-bool localization_trusted = false;
-bool localization_good_scan = false;
-bool prior_map_load_attempted = false;
-uint64_t pending_initial_pose_seq = 0;
-Eigen::Isometry3d map_to_odom = Eigen::Isometry3d::Identity();
-Eigen::Isometry3d map_to_lio_odom = Eigen::Isometry3d::Identity();
-int localization_good_frames = 0;
+bool has_pending_initial_pose = false;
+bool output_base_to_lidar_initialized = false;
+size_t prior_map_points = 0;
 int processed_frame_count = 0;
-size_t prior_map_point_count = 0;
-std::mutex initial_pose_mutex;
+int consecutive_good_frames = 0;
+std::string localization_state = "initializing";
 geometry_msgs::msg::PoseWithCovarianceStamped pending_initial_pose;
+std::mutex initial_pose_mutex;
+Eigen::Isometry3d output_base_to_lidar = Eigen::Isometry3d::Identity();
+rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_pub;
+std::unique_ptr<tf2_ros::Buffer> localization_tf_buffer;
+std::unique_ptr<tf2_ros::TransformListener> localization_tf_listener;
+static rclcpp::Clock throttle_clock(RCL_SYSTEM_TIME);
 
 // Time Log Variables
 double match_time = 0, solve_time = 0, propag_time = 0, update_time = 0;
@@ -66,6 +75,47 @@ geometry_msgs::msg::PoseStamped msg_body_pose;
 int sleep_time = 0;
 
 auto LOGGER = rclcpp::get_logger("laserMapping");
+
+bool loadPriorMapIntoIvox();
+
+static std::string boolString(bool value) { return value ? "true" : "false"; }
+
+static std::string numberString(double value)
+{
+  if (!std::isfinite(value)) {
+    return "nan";
+  }
+  std::ostringstream stream;
+  stream.precision(6);
+  stream << std::fixed << value;
+  return stream.str();
+}
+
+static Eigen::Isometry3d poseVectorToIsometry(const std::vector<double> & pose)
+{
+  Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
+  if (pose.size() >= 3) {
+    transform.translation() << pose[0], pose[1], pose[2];
+  }
+  const double roll = pose.size() >= 6 ? pose[3] : 0.0;
+  const double pitch = pose.size() >= 6 ? pose[4] : 0.0;
+  const double yaw = pose.size() >= 6 ? pose[5] : 0.0;
+  transform.linear() =
+    (Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()) *
+    Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) *
+    Eigen::AngleAxisd(roll, Eigen::Vector3d::UnitX())).toRotationMatrix();
+  return transform;
+}
+
+static Eigen::Isometry3d poseMsgToIsometry(const geometry_msgs::msg::Pose & pose)
+{
+  Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
+  transform.translation() << pose.position.x, pose.position.y, pose.position.z;
+  transform.linear() = Eigen::Quaterniond(
+    pose.orientation.w, pose.orientation.x, pose.orientation.y,
+    pose.orientation.z).normalized().toRotationMatrix();
+  return transform;
+}
 
 Eigen::Vector3d currentBodyLinearVelocity()
 {
@@ -98,176 +148,26 @@ void SigHandle(int sig)
   sig_buffer.notify_all();
 }
 
-PointCloudXYZI::Ptr loadPointcloudFromPcd(const std::string & file_path)
+Eigen::Isometry3d currentInternalStateToLidarFrame()
 {
-  auto pcd_ptr = std::make_shared<PointCloudXYZI>();
-
-  if (pcl::io::loadPCDFile(file_path, *pcd_ptr) == -1) {
-    RCLCPP_ERROR(LOGGER, "Couldn't read pcd file %s", file_path.c_str());
-    return nullptr;
-  }
-
-  RCLCPP_INFO(LOGGER, "Loaded %zu points from %s", pcd_ptr->size(), file_path.c_str());
-  return pcd_ptr;
-}
-
-Eigen::Matrix3d rpyToRotation(double roll, double pitch, double yaw)
-{
-  return (
-    Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()) *
-    Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) *
-    Eigen::AngleAxisd(roll, Eigen::Vector3d::UnitX())).toRotationMatrix();
-}
-
-Eigen::Isometry3d poseVectorToIsometry(const std::vector<double> & pose)
-{
-  Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
-  if (pose.size() >= 3) {
-    transform.translation() << pose[0], pose[1], pose[2];
-  }
-  if (pose.size() >= 6) {
-    transform.linear() = rpyToRotation(pose[3], pose[4], pose[5]);
-  }
-  return transform;
-}
-
-bool validPoseVectorSize(const std::vector<double> & pose, const std::string & name)
-{
-  if (pose.empty()) {
-    return false;
-  }
-  if (pose.size() == 3 || pose.size() == 6) {
-    return true;
-  }
-  RCLCPP_ERROR(LOGGER, "%s must contain 3 or 6 values, got %zu.", name.c_str(), pose.size());
-  return false;
-}
-
-bool vectorHasSize(
-  const std::vector<double> & values, size_t expected_size, const std::string & name)
-{
-  if (values.empty()) {
-    return false;
-  }
-  if (values.size() == expected_size) {
-    return true;
-  }
-  RCLCPP_ERROR(
-    LOGGER, "%s must contain %zu values, got %zu.",
-    name.c_str(), expected_size, values.size());
-  return false;
-}
-
-V3D configuredGravityInCurrentWorld()
-{
-  if (prior_pcd_localization_mode &&
-    vectorHasSize(prior_pcd_map_gravity, 3, "prior_pcd.map_gravity"))
-  {
-    return V3D(VEC_FROM_ARRAY(prior_pcd_map_gravity));
-  }
-  return V3D(VEC_FROM_ARRAY(gravity));
-}
-
-Eigen::Isometry3d currentInternalStateToPublishedStateFrame()
-{
-  Eigen::Isometry3d internal_to_published = Eigen::Isometry3d::Identity();
-  if (prior_pcd_state_frame == "body") {
-    return internal_to_published;
-  }
+  Eigen::Isometry3d internal_to_lidar = Eigen::Isometry3d::Identity();
 
   if (extrinsic_est_en) {
     if (use_imu_as_input) {
-      internal_to_published.linear() = kf_input.x_.offset_R_L_I;
-      internal_to_published.translation() = kf_input.x_.offset_T_L_I;
+      internal_to_lidar.linear() = kf_input.x_.offset_R_L_I;
+      internal_to_lidar.translation() = kf_input.x_.offset_T_L_I;
     } else {
-      internal_to_published.linear() = kf_output.x_.offset_R_L_I;
-      internal_to_published.translation() = kf_output.x_.offset_T_L_I;
+      internal_to_lidar.linear() = kf_output.x_.offset_R_L_I;
+      internal_to_lidar.translation() = kf_output.x_.offset_T_L_I;
     }
   } else {
-    internal_to_published.linear() = Lidar_R_wrt_IMU;
-    internal_to_published.translation() = Lidar_T_wrt_IMU;
+    internal_to_lidar.linear() = Lidar_R_wrt_IMU;
+    internal_to_lidar.translation() = Lidar_T_wrt_IMU;
   }
-  return internal_to_published;
+  return internal_to_lidar;
 }
 
-void applyStatePose(
-  const Eigen::Isometry3d & map_to_internal_state,
-  const Eigen::Isometry3d & selected_map_to_odom,
-  const Eigen::Isometry3d & odom_to_published_state_at_init)
-{
-  if (prior_pcd_localization_mode) {
-    map_to_odom = selected_map_to_odom;
-    map_to_lio_odom = map_to_odom * odom_to_published_state_at_init;
-  }
-
-  if (use_imu_as_input) {
-    state_input state = kf_input.get_x();
-    state.pos = map_to_internal_state.translation();
-    state.rot = map_to_internal_state.rotation();
-    state.vel = Zero3d;
-    kf_input.change_x(state);
-  } else {
-    state_output state = kf_output.get_x();
-    state.pos = map_to_internal_state.translation();
-    state.rot = map_to_internal_state.rotation();
-    state.vel = Zero3d;
-    state.omg = Zero3d;
-    state.acc = Zero3d;
-    kf_output.change_x(state);
-  }
-
-  is_first_frame = true;
-  time_update_last = 0.0;
-  time_predict_last_const = 0.0;
-  t_last = 0.0;
-  initial_pose_applied = true;
-  localization_good_frames = 0;
-  localization_trusted = false;
-}
-
-bool loadPriorMapIntoIvox()
-{
-  if (!enable_prior_pcd) {
-    return false;
-  }
-  if (prior_map_loaded) {
-    return true;
-  }
-  if (prior_pcd_map_path.empty()) {
-    RCLCPP_ERROR(LOGGER, "prior_pcd.enable=true but prior_pcd_map_path is empty.");
-    return false;
-  }
-  prior_map_load_attempted = true;
-
-  auto map_cloud = loadPointcloudFromPcd(prior_pcd_map_path);
-  if (!map_cloud || map_cloud->empty()) {
-    RCLCPP_ERROR(LOGGER, "Prior map is empty: %s", prior_pcd_map_path.c_str());
-    return false;
-  }
-
-  if (prior_pcd_leaf_size > 0.0) {
-    pcl::VoxelGrid<PointType> voxel_filter;
-    voxel_filter.setLeafSize(
-      static_cast<float>(prior_pcd_leaf_size),
-      static_cast<float>(prior_pcd_leaf_size),
-      static_cast<float>(prior_pcd_leaf_size));
-    voxel_filter.setInputCloud(map_cloud);
-    PointCloudXYZI::Ptr filtered(new PointCloudXYZI());
-    voxel_filter.filter(*filtered);
-    map_cloud = filtered;
-  }
-
-  ivox_->AddPoints(map_cloud->points);
-  prior_map_point_count = map_cloud->points.size();
-  prior_map_loaded = true;
-  init_map = true;
-  RCLCPP_INFO(
-    LOGGER, "Prior map loaded into IVox: %zu points, localization_mode=%d",
-    prior_map_point_count, prior_pcd_localization_mode ? 1 : 0);
-  return true;
-}
-
-void resetLocalizationRuntimeState()
+void resetMappingRuntimeState()
 {
   feats_undistort.reset(new PointCloudXYZI());
   flg_first_scan = true;
@@ -275,285 +175,205 @@ void resetLocalizationRuntimeState()
   flg_reset = false;
   init_map = false;
   prior_map_loaded = false;
-  prior_map_load_attempted = false;
-  initial_pose_applied = false;
-  localization_trusted = false;
-  localization_good_scan = false;
-  localization_good_frames = 0;
+  prior_map_points = 0;
   processed_frame_count = 0;
-  map_to_odom = Eigen::Isometry3d::Identity();
-  map_to_lio_odom = Eigen::Isometry3d::Identity();
+  consecutive_good_frames = 0;
+  initial_pose_applied = false;
+  output_base_to_lidar_initialized = false;
+  output_base_to_lidar = Eigen::Isometry3d::Identity();
+  localization_state = "initializing";
   sleep_time = 0;
   ivox_.reset(new IVoxType(ivox_options_));
-  if (enable_prior_pcd && prior_pcd_localization_mode) {
+  if (prior_pcd_localization_mode) {
     loadPriorMapIntoIvox();
   }
 }
 
-Eigen::Isometry3d currentOdomToState()
+Eigen::Isometry3d currentOdomToInternalState()
 {
-  Eigen::Isometry3d map_to_state = Eigen::Isometry3d::Identity();
+  Eigen::Isometry3d odom_to_state = Eigen::Isometry3d::Identity();
   if (use_imu_as_input) {
-    map_to_state.translation() << kf_input.x_.pos(0), kf_input.x_.pos(1), kf_input.x_.pos(2);
-    map_to_state.linear() = kf_input.x_.rot;
+    odom_to_state.translation() << kf_input.x_.pos(0), kf_input.x_.pos(1), kf_input.x_.pos(2);
+    odom_to_state.linear() = kf_input.x_.rot;
   } else {
-    map_to_state.translation() << kf_output.x_.pos(0), kf_output.x_.pos(1), kf_output.x_.pos(2);
-    map_to_state.linear() = kf_output.x_.rot;
+    odom_to_state.translation() << kf_output.x_.pos(0), kf_output.x_.pos(1), kf_output.x_.pos(2);
+    odom_to_state.linear() = kf_output.x_.rot;
   }
-  return map_to_state;
-}
-
-Eigen::Isometry3d currentMapToState()
-{
-  return currentOdomToState();
-}
-
-Eigen::Isometry3d currentMapToPublishedStateFrame()
-{
-  return currentMapToState() * currentInternalStateToPublishedStateFrame();
+  return odom_to_state;
 }
 
 Eigen::Isometry3d currentLioOdomToPublishedStateFrame()
 {
-  const Eigen::Isometry3d map_to_published_state = currentMapToPublishedStateFrame();
-  if (!prior_pcd_localization_mode || !initial_pose_applied) {
-    return map_to_published_state;
-  }
-  return map_to_lio_odom.inverse() * map_to_published_state;
+  return currentOdomToInternalState() * currentInternalStateToLidarFrame();
 }
 
-void updateLocalizationTrust()
+void setFilterStateFromOdomToInternal(
+  const Eigen::Isometry3d & odom_to_internal,
+  Eigen::Matrix<double, 24, 24> & P_init,
+  Eigen::Matrix<double, 30, 30> & P_init_output)
 {
-  const double effective_ratio =
-    feats_down_size > 0 ? static_cast<double>(effct_feat_num) / static_cast<double>(feats_down_size) : 0.0;
-  if (!prior_pcd_localization_mode) {
-    localization_good_scan = false;
-    localization_good_frames = 0;
-    localization_trusted = false;
-    return;
-  }
-  localization_good_scan =
-    prior_map_loaded &&
-    initial_pose_applied &&
-    (!imu_en || p_imu->after_imu_init_) &&
-    feats_down_size > 0 &&
-    effct_feat_num >= localization_min_effective_features &&
-    effective_ratio >= localization_min_effective_ratio;
-
-  if (localization_good_scan) {
-    localization_good_frames++;
+  if (use_imu_as_input) {
+    state_input state = kf_input.get_x();
+    state.pos = odom_to_internal.translation();
+    state.rot = odom_to_internal.rotation();
+    state.vel.setZero();
+    kf_input.change_x(state);
+    kf_input.change_P(P_init);
   } else {
-    localization_good_frames = 0;
+    state_output state = kf_output.get_x();
+    state.pos = odom_to_internal.translation();
+    state.rot = odom_to_internal.rotation();
+    state.vel.setZero();
+    state.omg.setZero();
+    state.acc.setZero();
+    kf_output.change_x(state);
+    kf_output.change_P(P_init_output);
   }
-  localization_trusted =
-    localization_good_frames >= std::max(1, localization_trust_frames);
+
+  is_first_frame = true;
+  time_update_last = 0.0;
+  time_predict_last_const = 0.0;
+  t_last = 0.0;
+  initial_pose_applied = true;
+  consecutive_good_frames = 0;
+  localization_state = prior_map_loaded ? "warming_up" : "map_not_loaded";
 }
 
-std::string localizationState()
+bool applyInitialPoseToFrame(
+  const Eigen::Isometry3d & map_to_pose_frame,
+  const std::string & pose_coordinate_frame,
+  Eigen::Matrix<double, 24, 24> & P_init,
+  Eigen::Matrix<double, 30, 30> & P_init_output,
+  const std::string & source)
 {
   if (!prior_pcd_localization_mode) {
-    return "odometry_only";
+    return false;
   }
-  if (prior_pcd_localization_mode && !prior_map_loaded) {
-    return "map_not_loaded";
-  }
-  if (imu_en && !p_imu->after_imu_init_) {
-    return "imu_initializing";
-  }
-  if (prior_pcd_localization_mode && !initial_pose_applied) {
-    return "initial_pose_waiting";
-  }
-  if (localization_trusted) {
-    return "trusted";
-  }
-  if (localization_good_frames > 0) {
-    return "warming_up";
-  }
-  return "degraded";
-}
-
-void publishLocalizationDiagnostics(
-  const rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr & pub)
-{
-  if (!pub) {
-    return;
+  Eigen::Isometry3d map_to_prior = map_to_pose_frame;
+  if (!prior_pcd_map_frame.empty() && pose_coordinate_frame != prior_pcd_map_frame) {
+    if (!localization_tf_buffer) {
+      return false;
+    }
+    try {
+      const auto map_to_pose_frame_msg = localization_tf_buffer->lookupTransform(
+        prior_pcd_map_frame, pose_coordinate_frame, rclcpp::Time(0),
+        rclcpp::Duration::from_seconds(0.05));
+      map_to_prior = tf2::transformToEigen(map_to_pose_frame_msg.transform) * map_to_pose_frame;
+    } catch (const tf2::TransformException & ex) {
+      localization_state = "waiting_for_initial_pose_tf";
+      RCLCPP_WARN_THROTTLE(
+        LOGGER, throttle_clock, 1000,
+        "Waiting for initial pose map-frame transform %s -> %s: %s",
+        prior_pcd_map_frame.c_str(), pose_coordinate_frame.c_str(), ex.what());
+      return false;
+    }
   }
 
-  diagnostic_msgs::msg::DiagnosticArray array;
-  array.header.stamp = get_ros_time(time_current > 0.0 ? time_current : lidar_end_time);
-  diagnostic_msgs::msg::DiagnosticStatus status;
-  status.name = "point_lio/localization";
-  status.hardware_id = "point_lio";
-  status.level = localization_trusted ?
-    diagnostic_msgs::msg::DiagnosticStatus::OK :
-    diagnostic_msgs::msg::DiagnosticStatus::WARN;
-  status.message = localizationState();
-
-  const double effective_ratio =
-    feats_down_size > 0 ? static_cast<double>(effct_feat_num) / static_cast<double>(feats_down_size) : 0.0;
-  const bool map_update_enabled =
-    !prior_pcd_localization_mode ||
-    (prior_pcd_map_update_frame > 0 && processed_frame_count < prior_pcd_map_update_frame);
-
-  auto add = [&](const std::string & key, const std::string & value) {
-      diagnostic_msgs::msg::KeyValue kv;
-      kv.key = key;
-      kv.value = value;
-      status.values.push_back(std::move(kv));
-    };
-
-  add("localization_state", status.message);
-  add("trusted", localization_trusted ? "true" : "false");
-  add("localization_mode", prior_pcd_localization_mode ? "true" : "false");
-  add("prior_map_load_attempted", prior_map_load_attempted ? "true" : "false");
-  add("prior_map_loaded", prior_map_loaded ? "true" : "false");
-  add("initial_pose_applied", initial_pose_applied ? "true" : "false");
-  add("imu_initialized", (!imu_en || p_imu->after_imu_init_) ? "true" : "false");
-  add("effective_features", std::to_string(effct_feat_num));
-  add("effective_ratio", std::to_string(effective_ratio));
-  add("downsampled_points", std::to_string(feats_down_size));
-  add("consecutive_good_frames", std::to_string(localization_good_frames));
-  add("map_update_enabled", map_update_enabled ? "true" : "false");
-  add("prior_map_points", std::to_string(prior_map_point_count));
-  add("map_to_odom_x", std::to_string(map_to_odom.translation().x()));
-  add("map_to_odom_y", std::to_string(map_to_odom.translation().y()));
-  add("map_to_odom_yaw", std::to_string(std::atan2(map_to_odom.linear()(1, 0), map_to_odom.linear()(0, 0))));
-  add("map_to_lio_odom_x", std::to_string(map_to_lio_odom.translation().x()));
-  add("map_to_lio_odom_y", std::to_string(map_to_lio_odom.translation().y()));
-
-  array.status.push_back(std::move(status));
-  pub->publish(array);
-}
-
-void publishMapToOdomTransform(
-  const std::shared_ptr<tf2_ros::TransformBroadcaster> & tf_br,
-  const rclcpp::Time & stamp)
-{
-  if (!tf_br || !prior_pcd_localization_mode || !initial_pose_applied) {
-    return;
+  const Eigen::Isometry3d internal_to_lidar = currentInternalStateToLidarFrame();
+  Eigen::Isometry3d map_to_lidar = map_to_prior;
+  if (prior_pcd_init_pose_frame != prior_pcd_lidar_frame) {
+    if (!localization_tf_buffer) {
+      return false;
+    }
+    try {
+      const auto pose_to_lidar_msg = localization_tf_buffer->lookupTransform(
+        prior_pcd_init_pose_frame, prior_pcd_lidar_frame, rclcpp::Time(0),
+        rclcpp::Duration::from_seconds(0.05));
+      map_to_lidar = map_to_prior * tf2::transformToEigen(pose_to_lidar_msg.transform);
+    } catch (const tf2::TransformException & ex) {
+      localization_state = "waiting_for_initial_pose_tf";
+      RCLCPP_WARN_THROTTLE(
+        LOGGER, throttle_clock, 1000,
+        "Waiting for initial pose frame transform %s -> %s: %s",
+        prior_pcd_init_pose_frame.c_str(), prior_pcd_lidar_frame.c_str(), ex.what());
+      return false;
+    }
   }
-
-  geometry_msgs::msg::TransformStamped transform;
-  transform.header.stamp = stamp;
-  transform.header.frame_id = prior_pcd_map_frame;
-  transform.child_frame_id = prior_pcd_odom_frame;
-  transform.transform = tf2::eigenToTransform(map_to_odom).transform;
-  tf_br->sendTransform(transform);
+  const Eigen::Isometry3d map_to_internal = map_to_lidar * internal_to_lidar.inverse();
+  setFilterStateFromOdomToInternal(map_to_internal, P_init, P_init_output);
+  RCLCPP_INFO_STREAM(
+    LOGGER, "Applied Point-LIO prior-map initial pose from " << source
+    << ": coordinate_frame=" << pose_coordinate_frame
+    << " pose_frame=" << prior_pcd_init_pose_frame
+    << " xyz=" << map_to_prior.translation().transpose());
+  return true;
 }
 
 void initialPoseCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg)
 {
   std::lock_guard<std::mutex> lock(initial_pose_mutex);
   pending_initial_pose = *msg;
-  initial_pose_pending = true;
-  pending_initial_pose_seq++;
+  has_pending_initial_pose = true;
 }
 
-bool applyInitialPoseInFrame(
-  const Eigen::Isometry3d & map_to_init_frame,
-  const std::shared_ptr<tf2_ros::Buffer> & tf_buffer)
+bool consumePendingInitialPose(
+  Eigen::Matrix<double, 24, 24> & P_init,
+  Eigen::Matrix<double, 30, 30> & P_init_output)
 {
-  Eigen::Isometry3d map_to_published_state = map_to_init_frame;
-  Eigen::Isometry3d odom_to_state_at_init = Eigen::Isometry3d::Identity();
-  if (!prior_pcd_init_pose_frame.empty() && prior_pcd_init_pose_frame != prior_pcd_state_frame) {
-    try {
-      const auto tf_msg = tf_buffer->lookupTransform(
-        prior_pcd_init_pose_frame, prior_pcd_state_frame, tf2::TimePointZero,
-        tf2::durationFromSec(0.1));
-      const Eigen::Isometry3d init_frame_to_lidar =
-        tf2::transformToEigen(tf_msg.transform);
-      odom_to_state_at_init = init_frame_to_lidar;
-      map_to_published_state = map_to_init_frame * init_frame_to_lidar;
-    } catch (const tf2::TransformException & ex) {
-      RCLCPP_WARN(
-        LOGGER,
-        "Could not transform initial pose from frame '%s' to Point-LIO state frame '%s': %s. "
-        "Waiting until this TF is available.",
-        prior_pcd_init_pose_frame.c_str(), prior_pcd_state_frame.c_str(), ex.what());
-      return false;
-    }
-  }
-
-  Eigen::Isometry3d selected_map_to_odom =
-    map_to_published_state * odom_to_state_at_init.inverse();
-  if (validPoseVectorSize(prior_pcd_map_to_odom, "prior_pcd.map_to_odom")) {
-    selected_map_to_odom = poseVectorToIsometry(prior_pcd_map_to_odom);
-  }
-
-  const Eigen::Isometry3d map_to_internal_state =
-    map_to_published_state * currentInternalStateToPublishedStateFrame().inverse();
-  applyStatePose(map_to_internal_state, selected_map_to_odom, odom_to_state_at_init);
-  RCLCPP_INFO(
-    LOGGER,
-    "Applied initial pose to Point-LIO prior localization: map_to_%s x=%.3f y=%.3f yaw=%.3f, map_to_odom x=%.3f y=%.3f yaw=%.3f",
-    prior_pcd_state_frame.c_str(),
-    map_to_published_state.translation().x(), map_to_published_state.translation().y(),
-    std::atan2(map_to_published_state.linear()(1, 0), map_to_published_state.linear()(0, 0)),
-    map_to_odom.translation().x(), map_to_odom.translation().y(),
-    std::atan2(map_to_odom.linear()(1, 0), map_to_odom.linear()(0, 0)));
-  return true;
-}
-
-bool applyConfiguredInitialPose(const std::shared_ptr<tf2_ros::Buffer> & tf_buffer)
-{
-  if (initial_pose_applied || init_pose.empty()) {
-    return false;
-  }
-  if (init_pose.size() != 3 && init_pose.size() != 6) {
-    RCLCPP_ERROR(
-      LOGGER, "prior_pcd.init_pose must contain 3 or 6 values, got %zu.", init_pose.size());
-    return false;
-  }
-  return applyInitialPoseInFrame(poseVectorToIsometry(init_pose), tf_buffer);
-}
-
-bool applyPendingInitialPose(const std::shared_ptr<tf2_ros::Buffer> & tf_buffer)
-{
-  geometry_msgs::msg::PoseWithCovarianceStamped msg;
-  uint64_t seq = 0;
+  geometry_msgs::msg::PoseWithCovarianceStamped pose_msg;
   {
     std::lock_guard<std::mutex> lock(initial_pose_mutex);
-    if (!initial_pose_pending) {
+    if (!has_pending_initial_pose) {
       return false;
     }
-    msg = pending_initial_pose;
-    seq = pending_initial_pose_seq;
+    pose_msg = pending_initial_pose;
+    has_pending_initial_pose = false;
   }
+  const std::string frame =
+    pose_msg.header.frame_id.empty() ? prior_pcd_map_frame : pose_msg.header.frame_id;
+  return applyInitialPoseToFrame(
+    poseMsgToIsometry(pose_msg.pose.pose), frame, P_init, P_init_output, "/initialpose");
+}
 
-  Eigen::Isometry3d source_to_init_frame = Eigen::Isometry3d::Identity();
-  source_to_init_frame.translation() << msg.pose.pose.position.x, msg.pose.pose.position.y,
-    msg.pose.pose.position.z;
-  source_to_init_frame.linear() = Eigen::Quaterniond(
-    msg.pose.pose.orientation.w, msg.pose.pose.orientation.x,
-    msg.pose.pose.orientation.y, msg.pose.pose.orientation.z).normalized().toRotationMatrix();
-
-  Eigen::Isometry3d map_to_init_frame = source_to_init_frame;
-  const std::string source_frame = msg.header.frame_id.empty() ? prior_pcd_map_frame : msg.header.frame_id;
-  if (!prior_pcd_map_frame.empty() && source_frame != prior_pcd_map_frame) {
-    try {
-      const auto tf_msg = tf_buffer->lookupTransform(
-        prior_pcd_map_frame, source_frame, tf2::TimePointZero, tf2::durationFromSec(0.1));
-      const Eigen::Isometry3d map_to_source = tf2::transformToEigen(tf_msg.transform);
-      map_to_init_frame = map_to_source * source_to_init_frame;
-    } catch (const tf2::TransformException & ex) {
-      RCLCPP_WARN(
-        LOGGER,
-        "Could not transform /initialpose from frame '%s' to prior map frame '%s': %s. "
-        "Ignoring this initial pose.",
-        source_frame.c_str(), prior_pcd_map_frame.c_str(), ex.what());
-      return false;
-    }
-  }
-  if (!applyInitialPoseInFrame(map_to_init_frame, tf_buffer)) {
+bool applyConfiguredInitialPoseIfReady(
+  Eigen::Matrix<double, 24, 24> & P_init,
+  Eigen::Matrix<double, 30, 30> & P_init_output)
+{
+  if (!prior_pcd_init_pose_configured || initial_pose_applied) {
     return false;
   }
-  {
-    std::lock_guard<std::mutex> lock(initial_pose_mutex);
-    if (initial_pose_pending && pending_initial_pose_seq == seq) {
-      initial_pose_pending = false;
-    }
+  return applyInitialPoseToFrame(
+    poseVectorToIsometry(prior_pcd_init_pose), prior_pcd_map_frame,
+    P_init, P_init_output, "prior_pcd.init_pose");
+}
+
+bool refreshOutputBaseToLidarTransform()
+{
+  if (!prior_pcd_localization_mode) {
+    return true;
   }
-  return true;
+  if (output_base_to_lidar_initialized) {
+    return true;
+  }
+  if (prior_pcd_output_base_frame.empty() ||
+    prior_pcd_output_base_frame == prior_pcd_lidar_frame)
+  {
+    output_base_to_lidar = Eigen::Isometry3d::Identity();
+    output_base_to_lidar_initialized = true;
+    return true;
+  }
+  if (!localization_tf_buffer) {
+    return false;
+  }
+  try {
+    const auto tf_msg = localization_tf_buffer->lookupTransform(
+      prior_pcd_output_base_frame, prior_pcd_lidar_frame, rclcpp::Time(0),
+      rclcpp::Duration::from_seconds(0.05));
+    output_base_to_lidar = tf2::transformToEigen(tf_msg.transform);
+    output_base_to_lidar_initialized = true;
+    RCLCPP_INFO_STREAM(
+      LOGGER, "Point-LIO prior output uses virtual camera_init frame: "
+      << prior_pcd_output_base_frame << " -> " << prior_pcd_lidar_frame
+      << " xyz=" << output_base_to_lidar.translation().transpose());
+    return true;
+  } catch (const tf2::TransformException & ex) {
+    localization_state = "waiting_for_output_tf";
+    RCLCPP_WARN_THROTTLE(
+      LOGGER, throttle_clock, 1000,
+      "Waiting for Point-LIO prior output transform %s -> %s: %s",
+      prior_pcd_output_base_frame.c_str(), prior_pcd_lidar_frame.c_str(), ex.what());
+    return false;
+  }
 }
 
 inline void dump_lio_state_to_log(FILE * fp)
@@ -651,6 +471,142 @@ void MapIncremental()
   ivox_->AddPoints(points_to_add);
 }
 
+bool loadPriorMapIntoIvox()
+{
+  if (!prior_pcd_enable || prior_pcd_map_path.empty()) {
+    return false;
+  }
+
+  PointCloudXYZI::Ptr map_cloud(new PointCloudXYZI());
+  if (pcl::io::loadPCDFile<PointType>(prior_pcd_map_path, *map_cloud) == -1) {
+    RCLCPP_ERROR(LOGGER, "Failed to load prior PCD map: %s", prior_pcd_map_path.c_str());
+    localization_state = "map_not_loaded";
+    return false;
+  }
+
+  PointCloudXYZI::Ptr filtered_map(new PointCloudXYZI());
+  if (prior_pcd_leaf_size > 1e-6) {
+    pcl::VoxelGrid<PointType> voxel_filter;
+    voxel_filter.setLeafSize(prior_pcd_leaf_size, prior_pcd_leaf_size, prior_pcd_leaf_size);
+    voxel_filter.setInputCloud(map_cloud);
+    voxel_filter.filter(*filtered_map);
+  } else {
+    filtered_map = map_cloud;
+  }
+
+  if (filtered_map->empty()) {
+    RCLCPP_ERROR(LOGGER, "Prior PCD map is empty after filtering: %s", prior_pcd_map_path.c_str());
+    localization_state = "map_not_loaded";
+    return false;
+  }
+
+  ivox_->AddPoints(filtered_map->points);
+  init_map = true;
+  prior_map_loaded = true;
+  prior_map_points = filtered_map->points.size();
+  localization_state = initial_pose_applied ? "warming_up" : "waiting_for_initial_pose";
+  RCLCPP_INFO(
+    LOGGER, "Loaded prior PCD map into Point-LIO IVox: %zu points from %s",
+    prior_map_points, prior_pcd_map_path.c_str());
+  return true;
+}
+
+bool shouldUpdateMap()
+{
+  if (!prior_pcd_localization_mode) {
+    return true;
+  }
+  return prior_pcd_map_update_frame > 0 && processed_frame_count < prior_pcd_map_update_frame;
+}
+
+void publishLocalizationDiagnostics()
+{
+  if (!diagnostics_pub) {
+    return;
+  }
+
+  const double effective_ratio =
+    static_cast<double>(effct_feat_num) / std::max(1, feats_down_size);
+  const bool map_ready = !prior_pcd_localization_mode || prior_map_loaded;
+  const bool initial_pose_ready = !prior_pcd_localization_mode || initial_pose_applied;
+  const bool output_frame_ready =
+    !prior_pcd_localization_mode || output_base_to_lidar_initialized;
+  const bool imu_ready = !imu_en || p_imu->after_imu_init_;
+  const bool map_update_enabled = shouldUpdateMap();
+
+  bool good_scan = false;
+  if (prior_pcd_localization_mode) {
+    good_scan =
+      map_ready && initial_pose_ready && output_frame_ready && imu_ready &&
+      effct_feat_num >= localization_min_effective_features &&
+      effective_ratio >= localization_min_effective_ratio;
+    if (good_scan) {
+      consecutive_good_frames++;
+    } else {
+      consecutive_good_frames = 0;
+    }
+
+    if (!prior_map_loaded) {
+      localization_state = "map_not_loaded";
+    } else if (!initial_pose_applied) {
+      localization_state = "waiting_for_initial_pose";
+    } else if (!output_frame_ready) {
+      localization_state = "waiting_for_output_tf";
+    } else if (!imu_ready) {
+      localization_state = "imu_initializing";
+    } else if (consecutive_good_frames >= localization_trust_frames) {
+      localization_state = "trusted";
+    } else if (effct_feat_num < localization_min_effective_features ||
+      effective_ratio < localization_min_effective_ratio)
+    {
+      localization_state = "degraded";
+    } else {
+      localization_state = "warming_up";
+    }
+  } else {
+    localization_state = "mapping";
+    consecutive_good_frames = 0;
+  }
+
+  const bool trusted =
+    prior_pcd_localization_mode && localization_state == "trusted";
+
+  diagnostic_msgs::msg::DiagnosticArray array;
+  array.header.stamp = rclcpp::Clock().now();
+
+  diagnostic_msgs::msg::DiagnosticStatus status;
+  status.name = "point_lio";
+  status.hardware_id = "point_lio";
+  status.level = trusted ? diagnostic_msgs::msg::DiagnosticStatus::OK :
+    diagnostic_msgs::msg::DiagnosticStatus::WARN;
+  status.message = localization_state;
+
+  auto add = [&](const std::string & key, const std::string & value) {
+      diagnostic_msgs::msg::KeyValue kv;
+      kv.key = key;
+      kv.value = value;
+      status.values.push_back(std::move(kv));
+    };
+
+  add("localization_state", localization_state);
+  add("trusted", boolString(trusted));
+  add("localization_mode", boolString(prior_pcd_localization_mode));
+  add("prior_map_loaded", boolString(prior_map_loaded));
+  add("initial_pose_set", boolString(initial_pose_applied));
+  add("output_frame_ready", boolString(output_frame_ready));
+  add("imu_initialized", boolString(imu_ready));
+  add("effective_features", std::to_string(effct_feat_num));
+  add("effective_ratio", numberString(effective_ratio));
+  add("downsampled_points", std::to_string(feats_down_size));
+  add("consecutive_good_frames", std::to_string(consecutive_good_frames));
+  add("map_update_enabled", boolString(map_update_enabled));
+  add("prior_map_points", std::to_string(prior_map_points));
+  add("processed_frame_count", std::to_string(processed_frame_count));
+
+  array.status.push_back(std::move(status));
+  diagnostics_pub->publish(array);
+}
+
 void publish_init_map(
   const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr & pubLaserCloudFullRes)
 {
@@ -673,21 +629,21 @@ void publish_frame_world(
   if (scan_pub_en) {
     sensor_msgs::msg::PointCloud2 laserCloudmsg;
     const PointCloudXYZI * publish_cloud = feats_down_world.get();
-    PointCloudXYZI lio_odom_cloud;
-    if (prior_pcd_localization_mode && initial_pose_applied) {
-      const Eigen::Isometry3d lio_odom_to_map = map_to_lio_odom.inverse();
-      lio_odom_cloud.resize(feats_down_world->size());
+    PointCloudXYZI virtual_lio_odom_cloud;
+    if (prior_pcd_localization_mode && output_base_to_lidar_initialized) {
+      const Eigen::Isometry3d map_to_virtual_lio_odom = output_base_to_lidar.inverse();
+      virtual_lio_odom_cloud.resize(feats_down_world->size());
       for (size_t i = 0; i < feats_down_world->size(); ++i) {
         const auto & point_map = feats_down_world->points[i];
-        const Eigen::Vector3d point_lio_odom =
-          lio_odom_to_map * Eigen::Vector3d(point_map.x, point_map.y, point_map.z);
-        lio_odom_cloud.points[i].x = static_cast<float>(point_lio_odom.x());
-        lio_odom_cloud.points[i].y = static_cast<float>(point_lio_odom.y());
-        lio_odom_cloud.points[i].z = static_cast<float>(point_lio_odom.z());
-        lio_odom_cloud.points[i].intensity = point_map.intensity;
-        lio_odom_cloud.points[i].curvature = point_map.curvature;
+        const Eigen::Vector3d point_virtual =
+          map_to_virtual_lio_odom * Eigen::Vector3d(point_map.x, point_map.y, point_map.z);
+        virtual_lio_odom_cloud.points[i].x = static_cast<float>(point_virtual.x());
+        virtual_lio_odom_cloud.points[i].y = static_cast<float>(point_virtual.y());
+        virtual_lio_odom_cloud.points[i].z = static_cast<float>(point_virtual.z());
+        virtual_lio_odom_cloud.points[i].intensity = point_map.intensity;
+        virtual_lio_odom_cloud.points[i].curvature = point_map.curvature;
       }
-      publish_cloud = &lio_odom_cloud;
+      publish_cloud = &virtual_lio_odom_cloud;
     }
     pcl::toROSMsg(*publish_cloud, laserCloudmsg);
 
@@ -738,10 +694,14 @@ template <typename T>
 void set_posestamp(T & out)
 {
   const Eigen::Isometry3d lio_odom_to_published_state = currentLioOdomToPublishedStateFrame();
-  out.position.x = lio_odom_to_published_state.translation().x();
-  out.position.y = lio_odom_to_published_state.translation().y();
-  out.position.z = lio_odom_to_published_state.translation().z();
-  Eigen::Quaterniond q(lio_odom_to_published_state.rotation());
+  Eigen::Isometry3d published_pose = lio_odom_to_published_state;
+  if (prior_pcd_localization_mode && initial_pose_applied && output_base_to_lidar_initialized) {
+    published_pose = output_base_to_lidar.inverse() * lio_odom_to_published_state;
+  }
+  out.position.x = published_pose.translation().x();
+  out.position.y = published_pose.translation().y();
+  out.position.z = published_pose.translation().z();
+  Eigen::Quaterniond q(published_pose.rotation());
   out.orientation.x = q.coeffs()[0];
   out.orientation.y = q.coeffs()[1];
   out.orientation.z = q.coeffs()[2];
@@ -750,7 +710,7 @@ void set_posestamp(T & out)
 
 void publish_odometry(
   const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr & pubOdomAftMapped,
-  std::shared_ptr<tf2_ros::TransformBroadcaster> & tf_br)
+  const std::shared_ptr<tf2_ros::TransformBroadcaster> & tf_br)
 {
   odomAftMapped.header.frame_id = "camera_init";
   odomAftMapped.child_frame_id = "body";
@@ -777,7 +737,6 @@ void publish_odometry(
   odomAftMapped.twist.covariance[35] = 0.03;
 
   pubOdomAftMapped->publish(odomAftMapped);
-  publishMapToOdomTransform(tf_br, odomAftMapped.header.stamp);
 
   if (tf_send_en) {
     geometry_msgs::msg::TransformStamped transform;
@@ -821,9 +780,8 @@ int main(int argc, char ** argv)
   readParameters(nh);
   std::cout << "lidar_type: " << lidar_type << '\n';
   ivox_ = std::make_shared<IVoxType>(ivox_options_);
-  if (enable_prior_pcd && prior_pcd_localization_mode) {
-    loadPriorMapIntoIvox();
-  }
+  localization_tf_buffer = std::make_unique<tf2_ros::Buffer>(nh->get_clock());
+  localization_tf_listener = std::make_unique<tf2_ros::TransformListener>(*localization_tf_buffer);
 
   path.header.stamp = get_ros_time(lidar_end_time);
   path.header.frame_id = "camera_init";
@@ -884,9 +842,6 @@ int main(int argc, char ** argv)
   }
   auto sub_imu =
     nh->create_subscription<sensor_msgs::msg::Imu>(imu_topic, rclcpp::SensorDataQoS(), imu_cbk);
-  auto sub_initial_pose =
-    nh->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
-    "initialpose", rclcpp::QoS(10), initialPoseCallback);
   auto pub_laser_cloud_full_res =
     nh->create_publisher<sensor_msgs::msg::PointCloud2>("cloud_registered", 20);
   auto pub_laser_cloud_full_res_body =
@@ -897,11 +852,18 @@ int main(int argc, char ** argv)
   auto pub_odom_aft_mapped =
     nh->create_publisher<nav_msgs::msg::Odometry>("aft_mapped_to_init", 20);
   auto pub_path = nh->create_publisher<nav_msgs::msg::Path>("path", 20);
-  auto tf_broadcaster = std::make_shared<tf2_ros::TransformBroadcaster>(nh);
-  auto tf_buffer = std::make_shared<tf2_ros::Buffer>(nh->get_clock());
-  auto tf_listener = std::make_shared<tf2_ros::TransformListener>(*tf_buffer);
-  auto pub_localization_diagnostics =
+  diagnostics_pub =
     nh->create_publisher<diagnostic_msgs::msg::DiagnosticArray>("point_lio/diagnostics", 1);
+  auto sub_initial_pose =
+    nh->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+    "initialpose", 10, initialPoseCallback);
+  auto tf_broadcaster = std::make_shared<tf2_ros::TransformBroadcaster>(nh);
+
+  if (prior_pcd_localization_mode) {
+    if (!loadPriorMapIntoIvox()) {
+      RCLCPP_ERROR(LOGGER, "Point-LIO prior-map localization mode requires a valid prior PCD map.");
+    }
+  }
 
   //------------------------------------------------------------------------------------------------------
   signal(SIGINT, SigHandle);
@@ -916,13 +878,15 @@ int main(int argc, char ** argv)
         if (use_imu_as_input) {
           // state_in = kf_input.get_x();
           state_in = state_input();
+          kf_input.change_x(state_in);
           kf_input.change_P(P_init);
         } else {
           // state_out = kf_output.get_x();
           state_out = state_output();
+          kf_output.change_x(state_out);
           kf_output.change_P(P_init_output);
         }
-        resetLocalizationRuntimeState();
+        resetMappingRuntimeState();
       }
 
       if (flg_first_scan) {
@@ -933,7 +897,7 @@ int main(int argc, char ** argv)
           printf("first imu time: %f\n", first_imu_time);
         }
         time_current = 0.0;
-        const V3D current_world_gravity = configuredGravityInCurrentWorld();
+        const V3D current_world_gravity = V3D(VEC_FROM_ARRAY(gravity));
         p_imu->gravity_ = current_world_gravity;
         if (imu_en) {
           // imu_next = *(imu_deque.front());
@@ -996,41 +960,36 @@ int main(int argc, char ** argv)
           if (imu_en) {
             tmp_gravity = -p_imu->mean_acc / p_imu->mean_acc.norm() * G_m_s2;
           } else {
-            tmp_gravity = configuredGravityInCurrentWorld();
+            tmp_gravity = V3D(VEC_FROM_ARRAY(gravity));
             p_imu->after_imu_init_ = true;
           }
           // V3D tmp_gravity << VEC_FROM_ARRAY(gravity_init);
-          M3D rot_init;
-          p_imu->Set_init(tmp_gravity, rot_init);
-          kf_input.x_.rot = rot_init;
-          kf_output.x_.rot = rot_init;
-          // kf_input.x_.rot; //.normalize();
-          // kf_output.x_.rot; //.normalize();
-          kf_output.x_.acc = -rot_init.transpose() * kf_output.x_.gravity;
-	        } else {
-	          publishLocalizationDiagnostics(pub_localization_diagnostics);
-	          continue;
-	        }
-	      }
-      applyPendingInitialPose(tf_buffer);
+	          M3D rot_init;
+	          p_imu->Set_init(tmp_gravity, rot_init);
+	          kf_input.x_.rot = rot_init;
+	          kf_output.x_.rot = rot_init;
+	          // kf_input.x_.rot; //.normalize();
+	          // kf_output.x_.rot; //.normalize();
+	          kf_output.x_.acc = -rot_init.transpose() * kf_output.x_.gravity;
+          if (prior_pcd_localization_mode) {
+            applyConfiguredInitialPoseIfReady(P_init, P_init_output);
+            consumePendingInitialPose(P_init, P_init_output);
+          }
+			        } else {
+          publishLocalizationDiagnostics();
+			          continue;
+			        }
+			      }
       if (prior_pcd_localization_mode) {
-        applyConfiguredInitialPose(tf_buffer);
-        if (!initial_pose_applied) {
-          publishLocalizationDiagnostics(pub_localization_diagnostics);
+        applyConfiguredInitialPoseIfReady(P_init, P_init_output);
+        consumePendingInitialPose(P_init, P_init_output);
+        refreshOutputBaseToLidarTransform();
+        if (!prior_map_loaded || !initial_pose_applied || !output_base_to_lidar_initialized) {
+          publishLocalizationDiagnostics();
           continue;
         }
       }
-	      /*** initialize the map ***/
-	      if (!init_map) {
-	        if (enable_prior_pcd && prior_pcd_localization_mode) {
-	          loadPriorMapIntoIvox();
-	          if (!init_map) {
-	            publishLocalizationDiagnostics(pub_localization_diagnostics);
-	            continue;
-	          }
-	        }
-	      }
-	      if (!init_map) {
+			      if (!init_map) {
 	        feats_down_world->resize(feats_undistort->size());
 	        for (int i = 0; i < feats_undistort->size(); i++) {
           {
@@ -1041,18 +1000,9 @@ int main(int argc, char ** argv)
           init_feats_world->points.emplace_back(point);
         }
 
-	        if (init_feats_world->size() >= init_map_size) {
-	          if (enable_prior_pcd) {
-	            auto map_cloud = loadPointcloudFromPcd(prior_pcd_map_path);
-	            if (map_cloud && !map_cloud->empty()) {
-	              ivox_->AddPoints(map_cloud->points);
-	              prior_map_loaded = true;
-	              prior_map_point_count = map_cloud->points.size();
-	            }
-	          } else {
-	            ivox_->AddPoints(init_feats_world->points);
-	          }
-          publish_init_map(pub_laser_cloud_map);
+		        if (init_feats_world->size() >= init_map_size) {
+		          ivox_->AddPoints(init_feats_world->points);
+	          publish_init_map(pub_laser_cloud_map);
           init_feats_world.reset(new PointCloudXYZI());
           init_map = true;
         } else {
@@ -1493,25 +1443,18 @@ int main(int argc, char ** argv)
         publish_odometry(pub_odom_aft_mapped, tf_broadcaster);
       }
 
-      updateLocalizationTrust();
-      processed_frame_count++;
-
       /*** add the feature points to map ***/
       t3 = omp_get_wtime();
-      if (feats_down_size > 4) {
-        const bool map_update_enabled =
-          !prior_pcd_localization_mode ||
-          (prior_pcd_map_update_frame > 0 && processed_frame_count < prior_pcd_map_update_frame);
-        if (map_update_enabled) {
-          MapIncremental();
-        }
-      }
-      t5 = omp_get_wtime();
-      /******* Publish points *******/
+	      if (feats_down_size > 4 && shouldUpdateMap()) {
+	        MapIncremental();
+	      }
+	      t5 = omp_get_wtime();
+      processed_frame_count++;
+      publishLocalizationDiagnostics();
+	      /******* Publish points *******/
       if (path_en) publish_path(pub_path);
       if (scan_pub_en || pcd_save_en) publish_frame_world(pub_laser_cloud_full_res);
       if (scan_pub_en && scan_body_pub_en) publish_frame_body(pub_laser_cloud_full_res_body);
-      publishLocalizationDiagnostics(pub_localization_diagnostics);
 
       /*** Debug variables Logging ***/
       if (runtime_pos_log) {

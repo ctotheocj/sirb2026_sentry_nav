@@ -2,7 +2,6 @@
 
 #include "sirb_nav2_plugins/bt_nodes/select_nearby_goal.hpp"
 #include "sirb_nav2_plugins/bt_nodes/corridor_replan_condition.hpp"
-#include "sirb_nav2_plugins/bt_nodes/localization_ready_condition.hpp"
 #include "sirb_nav2_plugins/bt_nodes/hole_pass_mode_controller.hpp"
 #include "sirb_nav2_plugins/bt_nodes/commit_trajectory_action.hpp"
 #include "sirb_nav2_plugins/bt_nodes/generate_minco_candidate_action.hpp"
@@ -11,7 +10,6 @@ BT_REGISTER_NODES(factory)
 {
   factory.registerNodeType<sirb_nav2_plugins::SelectNearbyGoal>("SelectNearbyGoal");
   factory.registerNodeType<sirb_nav2_plugins::ReplanCondition>("ReplanCondition");
-  factory.registerNodeType<sirb_nav2_plugins::LocalizationReadyCondition>("LocalizationReady");
   factory.registerNodeType<sirb_nav2_plugins::HolePassModeController>("HolePassModeController");
   BT::NodeBuilder commit_builder =
     [](const std::string & name, const BT::NodeConfiguration & config) {

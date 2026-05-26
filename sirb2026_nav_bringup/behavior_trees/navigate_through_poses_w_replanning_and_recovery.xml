@@ -5,12 +5,6 @@
     <RecoveryNode name="NavigateRecovery"
                   number_of_retries="8">
       <PipelineSequence name="NavigateWithReplanning">
-        <LocalizationReady diagnostics_topics="point_lio/diagnostics,ndt_omp_relocalization/diagnostics"
-                           max_age="0.8"
-                           required_ready_ticks="1"
-                           required_state="trusted"
-                           require_trusted="true"
-                           allow_missing_diagnostics="false"/>
         <HolePassModeController global_frame="map"
                                 robot_frame="gimbal_yaw_fake"
                                 param_prefix="hole_pass"

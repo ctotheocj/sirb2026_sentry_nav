@@ -75,18 +75,13 @@ extern double online_refine_time;  //unit: s
 extern bool cut_frame_init;
 extern double time_update_last, time_current, time_predict_last_const, t_last;
 
-extern bool enable_prior_pcd;
-extern string prior_pcd_map_path;
-extern std::vector<double> init_pose;
-extern bool prior_pcd_localization_mode;
-extern int prior_pcd_map_update_frame;
+extern bool prior_pcd_enable, prior_pcd_localization_mode;
+extern bool prior_pcd_init_pose_configured;
+extern std::string prior_pcd_map_path, prior_pcd_map_frame, prior_pcd_init_pose_frame;
+extern std::string prior_pcd_lidar_frame, prior_pcd_output_base_frame;
+extern std::vector<double> prior_pcd_init_pose;
 extern double prior_pcd_leaf_size;
-extern std::string prior_pcd_map_frame;
-extern std::string prior_pcd_odom_frame;
-extern std::string prior_pcd_init_pose_frame;
-extern std::string prior_pcd_state_frame;  // Point-LIO pose frame exposed through loam_interface.
-extern std::vector<double> prior_pcd_map_to_odom;
-extern std::vector<double> prior_pcd_map_gravity;
+extern int prior_pcd_map_update_frame;
 extern int localization_trust_frames;
 extern int localization_min_effective_features;
 extern double localization_min_effective_ratio;

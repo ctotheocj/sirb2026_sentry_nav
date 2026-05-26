@@ -36,26 +36,21 @@ shared_ptr<ImuProcess> p_imu;
 double time_update_last = 0.0, time_current = 0.0, time_predict_last_const = 0.0, t_last = 0.0;
 double time_diff_lidar_to_imu = 0.0;
 
-bool enable_prior_pcd;
-string prior_pcd_map_path;
-std::vector<double> init_pose;
-bool prior_pcd_localization_mode = false;
-int prior_pcd_map_update_frame = -1;
-double prior_pcd_leaf_size = 0.12;
-std::string prior_pcd_map_frame = "map";
-std::string prior_pcd_odom_frame = "odom";
-std::string prior_pcd_init_pose_frame = "base_footprint";
-std::string prior_pcd_state_frame = "front_mid360";
-std::vector<double> prior_pcd_map_to_odom;
-std::vector<double> prior_pcd_map_gravity;
-int localization_trust_frames = 10;
-int localization_min_effective_features = 80;
-double localization_min_effective_ratio = 0.08;
-
 double lidar_time_inte = 0.1, first_imu_time = 0.0;
 int cut_frame_num = 1, orig_odom_freq = 10;
 double online_refine_time = 20.0;  //unit: s
 bool cut_frame_init = false;       // true;
+bool prior_pcd_enable = false, prior_pcd_localization_mode = false;
+bool prior_pcd_init_pose_configured = false;
+std::string prior_pcd_map_path, prior_pcd_map_frame = "map",
+  prior_pcd_init_pose_frame = "base_footprint", prior_pcd_lidar_frame = "front_mid360",
+  prior_pcd_output_base_frame = "base_footprint";
+std::vector<double> prior_pcd_init_pose;
+double prior_pcd_leaf_size = 0.12;
+int prior_pcd_map_update_frame = -1;
+int localization_trust_frames = 10;
+int localization_min_effective_features = 80;
+double localization_min_effective_ratio = 0.08;
 
 MeasureGroup Measures;
 
@@ -117,51 +112,6 @@ void readParameters(std::shared_ptr<rclcpp::Node> & nh)
     nh->declare_parameter<double>("common.time_diff_lidar_to_imu", 0.0);
     nh->get_parameter("common.time_diff_lidar_to_imu", time_diff_lidar_to_imu);
 
-    nh->declare_parameter<bool>("prior_pcd.enable", false);
-    nh->get_parameter("prior_pcd.enable", enable_prior_pcd);
-
-    nh->declare_parameter<bool>("prior_pcd.localization_mode", false);
-    nh->get_parameter("prior_pcd.localization_mode", prior_pcd_localization_mode);
-
-    nh->declare_parameter<string>("prior_pcd.prior_pcd_map_path", "");
-    nh->get_parameter("prior_pcd.prior_pcd_map_path", prior_pcd_map_path);
-
-    nh->declare_parameter<std::vector<double>>("prior_pcd.init_pose", std::vector<double>());
-    nh->get_parameter("prior_pcd.init_pose", init_pose);
-
-    nh->declare_parameter<std::string>("prior_pcd.init_pose_frame", "base_footprint");
-    nh->get_parameter("prior_pcd.init_pose_frame", prior_pcd_init_pose_frame);
-
-    nh->declare_parameter<std::string>("prior_pcd.state_frame", "front_mid360");
-    nh->get_parameter("prior_pcd.state_frame", prior_pcd_state_frame);
-
-    nh->declare_parameter<double>("prior_pcd.leaf_size", 0.12);
-    nh->get_parameter("prior_pcd.leaf_size", prior_pcd_leaf_size);
-
-    nh->declare_parameter<std::string>("prior_pcd.map_frame", "map");
-    nh->get_parameter("prior_pcd.map_frame", prior_pcd_map_frame);
-
-    nh->declare_parameter<std::string>("prior_pcd.odom_frame", "odom");
-    nh->get_parameter("prior_pcd.odom_frame", prior_pcd_odom_frame);
-
-    nh->declare_parameter<std::vector<double>>("prior_pcd.map_to_odom", std::vector<double>());
-    nh->get_parameter("prior_pcd.map_to_odom", prior_pcd_map_to_odom);
-
-    nh->declare_parameter<std::vector<double>>("prior_pcd.map_gravity", std::vector<double>());
-    nh->get_parameter("prior_pcd.map_gravity", prior_pcd_map_gravity);
-
-    nh->declare_parameter<int>("prior_pcd.map_update_frame", -1);
-    nh->get_parameter("prior_pcd.map_update_frame", prior_pcd_map_update_frame);
-
-    nh->declare_parameter<int>("diagnostics.trust_frames", 10);
-    nh->get_parameter("diagnostics.trust_frames", localization_trust_frames);
-
-    nh->declare_parameter<int>("diagnostics.min_effective_features", 80);
-    nh->get_parameter("diagnostics.min_effective_features", localization_min_effective_features);
-
-    nh->declare_parameter<double>("diagnostics.min_effective_ratio", 0.08);
-    nh->get_parameter("diagnostics.min_effective_ratio", localization_min_effective_ratio);
-
     nh->declare_parameter<double>("filter_size_surf", 0.5);
     nh->get_parameter("filter_size_surf", filter_size_surf_min);
 
@@ -185,6 +135,57 @@ void readParameters(std::shared_ptr<rclcpp::Node> & nh)
 
     nh->declare_parameter<double>("mapping.lidar_meas_cov", 0.1);
     nh->get_parameter("mapping.lidar_meas_cov", laser_point_cov);
+
+    nh->declare_parameter<bool>("prior_pcd.enable", false);
+    nh->get_parameter("prior_pcd.enable", prior_pcd_enable);
+
+    nh->declare_parameter<bool>("prior_pcd.localization_mode", false);
+    nh->get_parameter("prior_pcd.localization_mode", prior_pcd_localization_mode);
+
+    nh->declare_parameter<std::string>("prior_pcd.prior_pcd_map_path", "");
+    nh->get_parameter("prior_pcd.prior_pcd_map_path", prior_pcd_map_path);
+
+    nh->declare_parameter<std::string>("prior_pcd.map_frame", "map");
+    nh->get_parameter("prior_pcd.map_frame", prior_pcd_map_frame);
+
+    nh->declare_parameter<std::vector<double>>("prior_pcd.init_pose", std::vector<double>{});
+    nh->get_parameter("prior_pcd.init_pose", prior_pcd_init_pose);
+    if (prior_pcd_init_pose.size() == 3) {
+      prior_pcd_init_pose.resize(6, 0.0);
+    } else if (prior_pcd_init_pose.size() != 6) {
+      if (!prior_pcd_init_pose.empty()) {
+        RCLCPP_WARN(
+          nh->get_logger(), "prior_pcd.init_pose must contain 3 or 6 values, got %zu. "
+          "Ignoring configured initial pose.",
+          prior_pcd_init_pose.size());
+      }
+      prior_pcd_init_pose.clear();
+    }
+    prior_pcd_init_pose_configured = !prior_pcd_init_pose.empty();
+
+    nh->declare_parameter<std::string>("prior_pcd.init_pose_frame", "base_footprint");
+    nh->get_parameter("prior_pcd.init_pose_frame", prior_pcd_init_pose_frame);
+
+    nh->declare_parameter<std::string>("prior_pcd.lidar_frame", "front_mid360");
+    nh->get_parameter("prior_pcd.lidar_frame", prior_pcd_lidar_frame);
+
+    nh->declare_parameter<std::string>("prior_pcd.output_base_frame", "base_footprint");
+    nh->get_parameter("prior_pcd.output_base_frame", prior_pcd_output_base_frame);
+
+    nh->declare_parameter<double>("prior_pcd.leaf_size", 0.12);
+    nh->get_parameter("prior_pcd.leaf_size", prior_pcd_leaf_size);
+
+    nh->declare_parameter<int>("prior_pcd.map_update_frame", -1);
+    nh->get_parameter("prior_pcd.map_update_frame", prior_pcd_map_update_frame);
+
+    nh->declare_parameter<int>("diagnostics.trust_frames", 10);
+    nh->get_parameter("diagnostics.trust_frames", localization_trust_frames);
+
+    nh->declare_parameter<int>("diagnostics.min_effective_features", 80);
+    nh->get_parameter("diagnostics.min_effective_features", localization_min_effective_features);
+
+    nh->declare_parameter<double>("diagnostics.min_effective_ratio", 0.08);
+    nh->get_parameter("diagnostics.min_effective_ratio", localization_min_effective_ratio);
 
     nh->declare_parameter<double>("mapping.acc_cov_input", 0.1);
     nh->get_parameter("mapping.acc_cov_input", acc_cov_input);

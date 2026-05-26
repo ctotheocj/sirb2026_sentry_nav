@@ -126,6 +126,7 @@ private:
   bool lookupTransformToMap(
     const std::string & source_frame,
     const rclcpp::Time & stamp,
+    bool allow_latest_fallback,
     Eigen::Affine3d & tf_map_source) const;
   Eigen::Affine3d poseMsgToEigen(const geometry_msgs::msg::Pose & pose) const;
   // FIESTA ESDF linked-list helpers
@@ -176,6 +177,8 @@ private:
   double voxel_decay_time_{5.0};
   double cloud_stale_timeout_sec_{0.5};
   double transform_timeout_sec_{0.05};
+  bool allow_latest_tf_fallback_{true};
+  double latest_tf_fallback_max_age_sec_{0.5};
   std::atomic<double> last_cloud_time_{-1.0};  // seconds; -1 = never received
 
   std::unique_ptr<tf2_ros::Buffer> tf_buffer_;

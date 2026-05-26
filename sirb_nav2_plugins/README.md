@@ -91,19 +91,8 @@ Additional parameters beyond the usual Nav2 voxel/obstacle-layer parameters:
 The package exports the BT plugin library `sirb_nav2_plugins_nodes`, which is listed in
 `bt_navigator.plugin_lib_names`. The current default behavior trees use custom nodes for
 trajectory candidate generation, committing trajectories, replanning gates, nearby-goal
-recovery, localization readiness, and hole-pass mode control.
-
-### LocalizationReady
-
-`LocalizationReady` consumes one or more `diagnostic_msgs/msg/DiagnosticArray` topics and
-returns success when any configured global localization source reports
-`localization_state=trusted` and `trusted=true` within `max_age`. The default tree listens to
-`point_lio/diagnostics` and `ndt_omp_relocalization/diagnostics`.
-
-Point-LIO reports `trusted` only in prior-map localization mode. In ordinary odometry/SLAM
-mode it reports `odometry_only`, so the BT gate cannot mistake high-rate local odometry for a
-valid global `map -> odom` localization source. When `localization_backend:=ndt`, the NDT
-diagnostics therefore remain the source that must become trusted.
+recovery, and hole-pass mode control. Localization is not a BT gate in the default trees; this
+matches the pb2025 navigation behavior where Nav2 starts planning as soon as it receives a goal.
 
 ### HolePassModeController
 

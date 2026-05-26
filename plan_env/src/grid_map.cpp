@@ -102,6 +102,9 @@ void GridMap::initMap(rclcpp::Node::SharedPtr node)
   voxel_decay_time_ = node->declare_parameter("map.voxel_decay_time", 5.0);
   cloud_stale_timeout_sec_ = node->declare_parameter("map.cloud_stale_timeout_sec", 0.5);
   transform_timeout_sec_ = node->declare_parameter("map.transform_timeout_sec", 0.05);
+  allow_latest_tf_fallback_ = node->declare_parameter("map.allow_latest_tf_fallback", true);
+  latest_tf_fallback_max_age_sec_ =
+    node->declare_parameter("map.latest_tf_fallback_max_age_sec", 0.5);
   const std::string cloud_topic  = node->declare_parameter("map.cloud_topic",  std::string("obstacle_cloud"));
   const std::string odom_topic   = node->declare_parameter("map.odom_topic",   std::string("odometry"));
   occ_grid_pub_ = node->create_publisher<nav_msgs::msg::OccupancyGrid>(
@@ -192,7 +195,7 @@ int GridMap::getInflateOccupancy(const Eigen::Vector3d & pos) const
 void GridMap::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
 {
   Eigen::Affine3d tf_map_odom = Eigen::Affine3d::Identity();
-  if (!lookupTransformToMap(msg->header.frame_id, msg->header.stamp, tf_map_odom)) return;
+  if (!lookupTransformToMap(msg->header.frame_id, msg->header.stamp, true, tf_map_odom)) return;
 
   const Eigen::Affine3d tf_odom_base = poseMsgToEigen(msg->pose.pose);
   const Eigen::Affine3d tf_map_base = tf_map_odom * tf_odom_base;
@@ -211,7 +214,7 @@ void GridMap::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
   }
 
   Eigen::Affine3d tf_map_cloud = Eigen::Affine3d::Identity();
-  if (!lookupTransformToMap(msg->header.frame_id, msg->header.stamp, tf_map_cloud)) return;
+  if (!lookupTransformToMap(msg->header.frame_id, msg->header.stamp, true, tf_map_cloud)) return;
 
   pcl::PointCloud<pcl::PointXYZ> cloud_in;
   pcl::fromROSMsg(*msg, cloud_in);
@@ -252,6 +255,7 @@ void GridMap::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 bool GridMap::lookupTransformToMap(
   const std::string & source_frame,
   const rclcpp::Time & stamp,
+  bool allow_latest_fallback,
   Eigen::Affine3d & tf_map_source) const
 {
   if (source_frame.empty() || source_frame == mp_.frame_id_) {
@@ -260,8 +264,32 @@ bool GridMap::lookupTransformToMap(
   }
 
   try {
-    const auto tf_msg = tf_buffer_->lookupTransform(
-      mp_.frame_id_, source_frame, stamp, rclcpp::Duration::from_seconds(transform_timeout_sec_));
+    geometry_msgs::msg::TransformStamped tf_msg;
+    try {
+      tf_msg = tf_buffer_->lookupTransform(
+        mp_.frame_id_, source_frame, stamp, rclcpp::Duration::from_seconds(transform_timeout_sec_));
+    } catch (const tf2::ExtrapolationException & ex) {
+      if (!allow_latest_fallback || !allow_latest_tf_fallback_) {
+        throw;
+      }
+      const rclcpp::Time latest_time(0, 0, node_->get_clock()->get_clock_type());
+      tf_msg = tf_buffer_->lookupTransform(
+        mp_.frame_id_, source_frame, latest_time,
+        rclcpp::Duration::from_seconds(transform_timeout_sec_));
+      const double latest_age = (node_->now() - rclcpp::Time(tf_msg.header.stamp)).seconds();
+      if (latest_age > latest_tf_fallback_max_age_sec_) {
+        RCLCPP_WARN_THROTTLE(
+          node_->get_logger(), *node_->get_clock(), 1000,
+          "[GridMap] latest TF %s -> %s is stale %.3fs > %.3fs; dropping frame",
+          source_frame.c_str(), mp_.frame_id_.c_str(), latest_age, latest_tf_fallback_max_age_sec_);
+        return false;
+      }
+      RCLCPP_WARN_THROTTLE(
+        node_->get_logger(), *node_->get_clock(), 1000,
+        "[GridMap] TF %s -> %s at stamp %.3f unavailable (%s); using latest transform stamp %.3f",
+        source_frame.c_str(), mp_.frame_id_.c_str(),
+        rclcpp::Time(stamp).seconds(), ex.what(), rclcpp::Time(tf_msg.header.stamp).seconds());
+    }
     tf_map_source = tf2::transformToEigen(tf_msg.transform);
     return true;
   } catch (const tf2::TransformException & ex) {

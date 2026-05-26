@@ -31,15 +31,14 @@ point_lio:
       time_diff_lidar_to_imu: 0.0                       # Time offset between LiDAR and IMU calibrated by other algorithms, e.g., LI-Init (find in Readme)
 
     prior_pcd:
-      enable: False
-      localization_mode: False
-      # NOTE: `prior_pcd_map_path` will be provided in the launch file
-      # prior_pcd_map_path: ""
-      init_pose: [ 0.0, 0.0, 0.0 ]
-      map_frame: "map"
-      init_pose_frame: "base_footprint"
-      state_frame: "front_mid360"
-      map_gravity: [ 0.0, 0.0, -9.81 ]
+      enable: false
+      localization_mode: false
+      prior_pcd_map_path: ""
+      map_frame: map
+      init_pose: [0.0, 0.0, 0.0]
+      init_pose_frame: base_footprint
+      lidar_frame: front_mid360
+      output_base_frame: base_footprint
       leaf_size: 0.12
       map_update_frame: -1
 
@@ -167,47 +166,20 @@ navigation_mode_manager:
     watchdog_timeout_sec: 8.0
     watchdog_restore_normal: false
 
-ndt_omp_relocalization:
+small_gicp_relocalization:
   ros__parameters:
     use_sim_time: true
-    num_threads: 8
-    ndt_resolution: 0.8
-    ndt_step_size: 0.08
-    ndt_epsilon: 0.01
-    ndt_max_iterations: 40
-    ndt_search_method: 1
-    fitness_score_threshold: 1.0
-    registration_period_ms: 250
-    global_leaf_size: 0.12
-    registered_leaf_size: 0.12
-    min_source_points: 800
-    min_filtered_points: 120
-    max_scan_age_sec: 0.5
+    num_threads: 4
+    num_neighbors: 20
+    global_leaf_size: 0.1
+    registered_leaf_size: 0.05
+    max_dist_sq: 3.0
     map_frame: map
     odom_frame: odom
     base_frame: base_footprint
     robot_base_frame: gimbal_yaw
-    init_pose:
-    - 0.0
-    - 0.0
-    - 0.0
-    - -0.0
-    - 0.0
-    - 0.0
-    enable_roll_pitch_fix: true
-    trust_ndt_threshold: 5
-    jump_threshold_xy: 0.30
-    jump_threshold_yaw: 0.45
-    jump_threshold_rp: 0.18
-    enable_quality_gate: true
-    quality_sample_points: 3000
-    quality_max_corr_dist: 1.2
-    quality_min_valid_correspondences: 120
-    quality_min_overlap_ratio: 0.30
-    quality_max_median_residual: 0.45
-    quality_max_p90_residual: 1.2
-    publish_tf_only_when_trusted: true
-    freeze_tf_when_not_trusted: true
+    lidar_frame: front_mid360
+    init_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
 pointcloud_to_laserscan:
   ros__parameters:
@@ -844,10 +816,12 @@ grid_map_node:
       occupancy_grid_debug: false
       occupancy_grid_publish_period_ms: 100
       esdf_update_period_ms: 50
-      cloud_stale_timeout_sec: 0.3
+      cloud_stale_timeout_sec: 0.6
       cloud_topic: obstacle_cloud
       odom_topic: odometry
       transform_timeout_sec: 0.05
+      allow_latest_tf_fallback: true
+      latest_tf_fallback_max_age_sec: 0.5
       voxel_decay_time: 3.0
       enable_esdf: true
       enable_negative_esdf: true

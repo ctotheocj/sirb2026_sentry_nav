@@ -83,12 +83,12 @@ SUPPORT_CHECKS = (
         expected_rate="Point-LIO/loam output",
         required_publishers=("loam_interface",),
         optional_subscribers=(
-            "ndt_omp_relocalization",
+            "small_gicp_relocalization",
             "lidar_preprocessor",
             "sensor_scan_generation",
             "dynamic_point_detector",
         ),
-        note="registered scan shared by perception and optional NDT fallback",
+        note="registered scan shared by perception and the small_gicp localization backend",
     ),
     TopicCheck(
         phase="localization",
