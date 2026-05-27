@@ -17,7 +17,8 @@ MPC::MPC(double dt, int horizon,
   // 构建固定尺寸的 OSQP 问题矩阵，后续每周期只更新梯度、边界和障碍线性化行。
   const int nx = 2, nu = 2;
   const int nU = nu * N_;
-  obs_row_offset_ = 8 * N_ + nU;
+  direction_row_offset_ = 8 * N_ + nU;
+  obs_row_offset_ = direction_row_offset_ + 2 * N_;
   const int nC = obs_row_offset_ + max_obs_ * N_;
 
   last_U_ = Eigen::VectorXd::Zero(nU);
@@ -72,6 +73,14 @@ MPC::MPC(double dt, int horizon,
     }
   }
   A_dense_.block(8*N_, 0, nU, nU) = D;
+  for (int i = 0; i < N_; ++i) {
+    const int tangent_row = direction_row_offset_ + 2 * i;
+    const int normal_row = tangent_row + 1;
+    A_dense_(tangent_row, i * nu) = 1.0;
+    A_dense_(tangent_row, i * nu + 1) = 1.0;
+    A_dense_(normal_row, i * nu) = 1.0;
+    A_dense_(normal_row, i * nu + 1) = -1.0;
+  }
   for (int obs = 0; obs < max_obs_; ++obs)
     for (int k = 0; k < N_; ++k)
       for (int j = 0; j < nU; ++j)
@@ -156,6 +165,63 @@ void MPC::setObstacles(const std::vector<ObstacleConstraint> & obstacles,
         it.valueRef() = A_dense_(it.row(), it.col());
 
   solver_.updateLinearConstraintsMatrix(A_sparse_);
+}
+
+void MPC::setReferenceDirectionConstraints(
+  const std::vector<Eigen::Vector2d> & tangents,
+  double max_reverse_speed,
+  double max_lateral_speed,
+  bool enabled)
+{
+  const int nu = 2;
+  const double reverse = std::max(0.0, max_reverse_speed);
+  const double lateral = std::max(0.0, max_lateral_speed);
+
+  for (int i = 0; i < N_; ++i) {
+    const int tangent_row = direction_row_offset_ + 2 * i;
+    const int normal_row = tangent_row + 1;
+    const int ux_col = i * nu;
+    const int uy_col = ux_col + 1;
+
+    bool active = enabled && i < static_cast<int>(tangents.size()) &&
+      std::isfinite(tangents[i].x()) && std::isfinite(tangents[i].y());
+    Eigen::Vector2d tangent = active ? tangents[i] : Eigen::Vector2d::UnitX();
+    const double norm = tangent.norm();
+    active = active && norm > 1.0e-6;
+
+    if (!active) {
+      A_dense_(tangent_row, ux_col) = 1.0;
+      A_dense_(tangent_row, uy_col) = 1.0;
+      A_dense_(normal_row, ux_col) = 1.0;
+      A_dense_(normal_row, uy_col) = -1.0;
+      lb_(tangent_row) = -OsqpEigen::INFTY;
+      ub_(tangent_row) =  OsqpEigen::INFTY;
+      lb_(normal_row) = -OsqpEigen::INFTY;
+      ub_(normal_row) =  OsqpEigen::INFTY;
+      continue;
+    }
+
+    tangent /= norm;
+    const Eigen::Vector2d normal(-tangent.y(), tangent.x());
+    A_dense_(tangent_row, ux_col) = tangent.x();
+    A_dense_(tangent_row, uy_col) = tangent.y();
+    A_dense_(normal_row, ux_col) = normal.x();
+    A_dense_(normal_row, uy_col) = normal.y();
+    lb_(tangent_row) = -reverse;
+    ub_(tangent_row) = OsqpEigen::INFTY;
+    lb_(normal_row) = -lateral;
+    ub_(normal_row) = lateral;
+  }
+
+  for (int j = 0; j < A_sparse_.cols(); ++j) {
+    for (Eigen::SparseMatrix<double>::InnerIterator it(A_sparse_, j); it; ++it) {
+      if (it.row() >= direction_row_offset_ && it.row() < obs_row_offset_) {
+        it.valueRef() = A_dense_(it.row(), it.col());
+      }
+    }
+  }
+  solver_.updateLinearConstraintsMatrix(A_sparse_);
+  solver_.updateBounds(lb_, ub_);
 }
 
 void MPC::clearObstacles()
@@ -245,6 +311,17 @@ SolveResult MPC::solve(const State & current, const std::vector<State> & ref,
     for (int k = 0; k < 8; ++k) {
       double ck = std::cos(2.0*M_PI*k/8.0), sk = std::sin(2.0*M_PI*k/8.0);
       if (ck*U(0) + sk*U(1) > fc_bound + 1e-2) {
+        has_last_solution_ = false; has_last_dual_ = false;
+        return {false, {0.0, 0.0}, status};
+      }
+    }
+    for (int row = direction_row_offset_; row < obs_row_offset_; ++row) {
+      const double value = A_dense_.row(row).dot(U);
+      const bool has_lower = std::isfinite(lb_(row)) && lb_(row) > -1.0e20;
+      const bool has_upper = std::isfinite(ub_(row)) && ub_(row) < 1.0e20;
+      if ((has_lower && value < lb_(row) - 1e-2) ||
+          (has_upper && value > ub_(row) + 1e-2))
+      {
         has_last_solution_ = false; has_last_dual_ = false;
         return {false, {0.0, 0.0}, status};
       }

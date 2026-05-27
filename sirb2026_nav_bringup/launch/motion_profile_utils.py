@@ -169,6 +169,11 @@ def apply_yaw_fusion_mode(data, enabled):
     yaw_fusion.setdefault("debug_logging", False)
 
 
+def apply_dodge_manager_mode(data, enabled):
+    dodge_manager = _node_params(data, "dodge_manager")
+    dodge_manager["enable_dodge"] = enabled
+
+
 def sync_hole_clear_corridors(data):
     bt_nav = _node_params(data, "bt_navigator")
     hole_pass = bt_nav.get("hole_pass", {})
@@ -254,7 +259,8 @@ def apply_launch_mode_guards(data, use_composition):
 
 def prepare_motion_profile_params(
     context, params_file_config, label, map_file_config=None,
-    use_dynamic_obstacles_config=None, use_yaw_fusion_config=None):
+    use_dynamic_obstacles_config=None, use_yaw_fusion_config=None,
+    use_dodge_manager_config=None):
     source = context.perform_substitution(params_file_config)
     with open(source, "r") as f:
         data = yaml.safe_load(f)
@@ -271,6 +277,11 @@ def prepare_motion_profile_params(
     else:
         use_yaw_fusion = _as_bool(context.launch_configurations.get("use_yaw_fusion", False))
     apply_yaw_fusion_mode(data, use_yaw_fusion)
+    if use_dodge_manager_config is not None:
+        use_dodge_manager = _as_bool(context.perform_substitution(use_dodge_manager_config))
+    else:
+        use_dodge_manager = _as_bool(context.launch_configurations.get("use_dodge_manager", False))
+    apply_dodge_manager_mode(data, use_dodge_manager)
     use_composition = context.launch_configurations.get("use_composition", "False").lower() == "true"
     esdf_disabled = apply_launch_mode_guards(data, use_composition)
     map_yaml_path = ""
@@ -301,4 +312,5 @@ def prepare_motion_profile_params(
         print("[motion_profile] use_composition=false; disabled smoother minco_use_esdf because GridMapRegistry is process-local")
     print(f"[motion_profile] dynamic_obstacles enabled={use_dynamic_obstacles}")
     print(f"[motion_profile] yaw_fusion enabled={use_yaw_fusion}")
+    print(f"[motion_profile] dodge_manager enabled={use_dodge_manager}")
     return []

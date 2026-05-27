@@ -4,7 +4,12 @@
 
 主要目的是用于适配 NAV2 局部路径规划器，当速度参考坐标系 `robot_base_frame` 变化剧烈时，如云台处于自旋扫描时，NAV2 局部路径规划器会将机器人的方向视为与当前路径规划方向一致，导致机器人无法正常运动。而使用 `fake_robot_base_frame` 可以规避这个问题，实现较稳定的轨迹跟踪效果。
 
-由于 NAV2 Humble 发行版仍主要使用 Twist 类型（不含时间戳），当前 bringup 使用 `input_cmd_vel_topic` 直接接收 `velocity_smoother` 输出并采用当前缓存 yaw 转换。若部署显式配置了 `input_cmd_vel_stamped_topic`，本节点会优先按速度命令时间戳查询 `odom_frame` 到 `robot_base_frame` 的 TF 并完成速度转换。
+由于 NAV2 Humble 发行版仍主要使用 Twist 类型（不含时间戳），当前 bringup 使用
+`input_cmd_vel_topic` 直接接收 `velocity_smoother` 输出，并使用最新
+`odom_topic` 或 `nav_yaw_topic` 初始化/刷新后的 yaw 转换。legacy Twist 到达时如果 yaw
+还没有初始化，节点会输出零速而不是按 yaw=0 误转换。若部署显式配置了
+`input_cmd_vel_stamped_topic`，本节点会优先按速度命令时间戳查询 `odom_frame` 到
+`robot_base_frame` 的 TF 并完成速度转换。
 Related issue: [Switch from Twist to TwistStamped for cmd_vel #1594](https://github.com/ros-navigation/navigation2/issues/1594)
 
 ## Published Topics

@@ -139,6 +139,7 @@ def generate_launch_description():
                 condition=IfCondition(PythonExpression(["not ", slam])),
                 parameters=[configured_params],
                 arguments=["--ros-args", "--log-level", log_level],
+                remappings=[("/tf", "tf"), ("/tf_static", "tf_static")],
             ),
             Node(
                 package="sensor_scan_generation",
@@ -150,6 +151,7 @@ def generate_launch_description():
                 respawn_delay=2.0,
                 parameters=[configured_params],
                 arguments=["--ros-args", "--log-level", log_level],
+                remappings=[("/tf", "tf"), ("/tf_static", "tf_static")],
             ),
             Node(
                 package="fake_vel_transform",
@@ -171,6 +173,17 @@ def generate_launch_description():
                 respawn_delay=2.0,
                 parameters=[configured_params],
                 arguments=["--ros-args", "--log-level", log_level],
+            ),
+            Node(
+                package="plan_env",
+                executable="grid_map_node",
+                name="grid_map_node",
+                output="screen",
+                respawn=use_respawn,
+                respawn_delay=2.0,
+                parameters=[configured_params],
+                arguments=["--ros-args", "--log-level", log_level],
+                remappings=[("/tf", "tf"), ("/tf_static", "tf_static")],
             ),
             Node(
                 package="nav2_controller",

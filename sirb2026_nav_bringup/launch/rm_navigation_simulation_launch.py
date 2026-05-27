@@ -41,6 +41,7 @@ def generate_launch_description():
     use_yaw_fusion        = LaunchConfiguration("use_yaw_fusion")
     use_tf_jump_monitor   = LaunchConfiguration("use_tf_jump_monitor")
     use_dynamic_obstacles = LaunchConfiguration("use_dynamic_obstacles")
+    use_dodge_manager     = LaunchConfiguration("use_dodge_manager")
 
     declare_namespace_cmd = DeclareLaunchArgument(
         "namespace", default_value="red_standard_robot1",
@@ -92,10 +93,17 @@ def generate_launch_description():
             "obstacle constraints in MPC/smoother/BT when True."
         ),
     )
+    declare_use_dodge_manager_cmd = DeclareLaunchArgument(
+        "use_dodge_manager",
+        default_value="False",
+        description=(
+            "Launch dodge_manager and enable its direct cmd_vel takeover when True."
+        ),
+    )
     prepare_motion_profile_cmd = OpaqueFunction(
         function=lambda context, *_: prepare_motion_profile_params(
             context, params_file, "simulation", map_yaml_file,
-            use_dynamic_obstacles, use_yaw_fusion))
+            use_dynamic_obstacles, use_yaw_fusion, use_dodge_manager))
 
     configured_params = ParameterFile(
         RewrittenYaml(
@@ -147,6 +155,7 @@ def generate_launch_description():
         name="dodge_manager",
         namespace=namespace,
         output="screen",
+        condition=IfCondition(use_dodge_manager),
         parameters=[configured_params],
         remappings=[("/tf", "tf"), ("/tf_static", "tf_static")],
     )
@@ -205,23 +214,6 @@ def generate_launch_description():
         parameters=[configured_params],
     )
 
-    def _make_grid_map_node(context, *_):
-        # When using composition, GridMapComponent runs inside the container instead
-        if context.launch_configurations.get("use_composition", "False").lower() == "true":
-            return []
-        ns_val = context.launch_configurations["namespace"]
-        return [Node(
-            package="plan_env",
-            executable="grid_map_node",
-            name="grid_map_node",
-            namespace=ns_val,
-            output="screen",
-            parameters=[configured_params],
-        )]
-
-    start_grid_map_node_cmd = OpaqueFunction(function=_make_grid_map_node)
-
-
     joy_teleop_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(launch_dir, "joy_teleop_launch.py")),
         launch_arguments={
@@ -258,12 +250,12 @@ def generate_launch_description():
     ld.add_action(declare_use_yaw_fusion_cmd)
     ld.add_action(declare_use_tf_jump_monitor_cmd)
     ld.add_action(declare_use_dynamic_obstacles_cmd)
+    ld.add_action(declare_use_dodge_manager_cmd)
     ld.add_action(prepare_motion_profile_cmd)
 
     ld.add_action(start_velodyne_convert_tool)
     ld.add_action(start_lidar_preprocessor_node)
     ld.add_action(start_dynamic_point_detector_node)
-    ld.add_action(start_grid_map_node_cmd)
     ld.add_action(bringup_cmd)
     ld.add_action(start_yaw_fusion_node)
     ld.add_action(start_dodge_manager_node)

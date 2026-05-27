@@ -36,7 +36,7 @@ bool MpcController::getOdomControlState(
   }
 
   const std::string global_frame = costmap_ros_->getGlobalFrameID();
-  const std::string control_base_frame = costmap_ros_->getBaseFrameID();
+  const std::string control_base_frame = state_frame_;
 
   const rclcpp::Time now = clock_->now();
   double age = 0.0;

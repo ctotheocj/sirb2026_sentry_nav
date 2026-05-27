@@ -106,7 +106,7 @@ Each hole has two unordered port polygons:
 bt_navigator:
   ros__parameters:
     hole_pass:
-      yaw_offset_deg: 0.0
+      target_yaw_deg: 0.0
       yaw_kp: 2.5
       max_v_yaw: 1.8
       raise_duration_sec: 1.0
@@ -151,9 +151,9 @@ active mode from `navigation_mode_manager/get_navigation_mode`; entry/exit direc
 again from the configured hole polygons, current pose, and navigation target rather than stored
 inside the generic mode service.
 
-The target chassis heading is computed from entry-port center to exit-port center plus
-`yaw_offset_deg`. `HolePassCmd.v_yaw` is the yaw-rate command in rad/s generated from that
-target heading, current TF yaw, `yaw_kp`, and `max_v_yaw`.
+The target chassis heading is `target_yaw_deg`: an absolute yaw in the map frame, measured
+counter-clockwise from map +x in degrees. `HolePassCmd.v_yaw` is the yaw-rate command in rad/s
+generated from that target heading, current TF yaw, `yaw_kp`, and `max_v_yaw`.
 
 ## Build
 

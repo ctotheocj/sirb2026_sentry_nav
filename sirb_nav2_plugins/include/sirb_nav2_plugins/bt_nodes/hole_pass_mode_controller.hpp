@@ -41,7 +41,9 @@ public:
       BT::InputPort<double>("exit_pass_margin", 0.2, "Distance past exit center that counts as exit"),
       BT::InputPort<double>("yaw_kp", 2.5, "Yaw velocity proportional gain"),
       BT::InputPort<double>("max_v_yaw", 1.8, "Absolute yaw velocity command limit"),
-      BT::InputPort<double>("yaw_offset_deg", 0.0, "Yaw offset applied to entry-exit heading"),
+      BT::InputPort<double>(
+        "target_yaw_deg", 0.0,
+        "Absolute target yaw in map frame degrees, measured counter-clockwise from map +x"),
       BT::InputPort<geometry_msgs::msg::PoseStamped>("goal", "Navigation goal"),
       BT::InputPort<std::vector<geometry_msgs::msg::PoseStamped>>(
         "goals", "Navigation goals"),
@@ -118,6 +120,7 @@ private:
     const std::vector<double> & exit,
     double target_x,
     double target_y);
+  double targetYawFromParameter();
   double activeVYaw(double robot_yaw);
   std::string paramPrefix() const;
   double parameterOrInput(const std::string & key, double default_value);

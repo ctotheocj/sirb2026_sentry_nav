@@ -73,12 +73,18 @@ void MpcController::setPlan(const nav_msgs::msg::Path & path)
   tf2::Transform base_to_global_tf;
   double robot_x = 0.0, robot_y = 0.0;
   try {
-    auto ts = tf_->lookupTransform(global_frame, costmap_ros_->getBaseFrameID(), tf2::TimePointZero);
+    auto ts = tf_->lookupTransform(global_frame, state_frame_, tf2::TimePointZero);
     tf2::fromMsg(ts.transform, base_to_global_tf);
     robot_x = base_to_global_tf.getOrigin().x();
     robot_y = base_to_global_tf.getOrigin().y();
     has_robot_tf = true;
   } catch (tf2::TransformException &) {}
+  if (!has_robot_tf) {
+    RCLCPP_WARN_THROTTLE(
+      node->get_logger(), *clock_, 1000,
+      "setPlan: cannot lookup state_frame '%s' in '%s'; target index and warm-start checks will be conservative",
+      state_frame_.c_str(), global_frame.c_str());
+  }
 
   bool reject_plan = false;
   if (has_lookahead && lookahead_idx > 0 && has_robot_tf) {
@@ -217,7 +223,7 @@ void MpcController::setPlan(const nav_msgs::msg::Path & path)
     }
 
     try {
-      auto ts = tf_->lookupTransform(global_frame, costmap_ros_->getBaseFrameID(), tf2::TimePointZero);
+      auto ts = tf_->lookupTransform(global_frame, state_frame_, tf2::TimePointZero);
       double r_x = ts.transform.translation.x;
       double r_y = ts.transform.translation.y;
       double min_dist_sq = std::numeric_limits<double>::max();
@@ -228,10 +234,40 @@ void MpcController::setPlan(const nav_msgs::msg::Path & path)
         double d_sq = dx * dx + dy * dy;
         if (d_sq < min_dist_sq) { min_dist_sq = d_sq; target_index_ = i; }
       }
-    } catch (...) { target_index_ = 0; }
+    } catch (...) {
+      target_index_ = 0;
+      RCLCPP_WARN_THROTTLE(
+        node->get_logger(), *clock_, 1000,
+        "setPlan: failed to initialize target index from state_frame '%s'",
+        state_frame_.c_str());
+    }
 
     last_target_index_ = target_index_;
     stuck_count_ = 0;
+    if (has_lookahead && std::hypot(new_dx, new_dy) > 1.0e-6) {
+      const Eigen::Vector2d new_tangent(new_dx, new_dy);
+      const Eigen::Vector2d new_normal(-new_tangent.y(), new_tangent.x());
+      const Eigen::Vector2d last_u(last_ux, last_uy);
+      const double lateral = last_u.dot(new_normal);
+      const double reverse = last_u.dot(new_tangent);
+      if (reverse < -max_reverse_speed_ - 1.0e-3 ||
+          std::abs(lateral) > max_lateral_correction_speed_ + 1.0e-3)
+      {
+        const double projected_longitudinal = std::max(reverse, -max_reverse_speed_);
+        const double projected_lateral =
+          std::clamp(lateral, -max_lateral_correction_speed_, max_lateral_correction_speed_);
+        const Eigen::Vector2d projected =
+          projected_longitudinal * new_tangent + projected_lateral * new_normal;
+        last_ux = projected.x();
+        last_uy = projected.y();
+        mpc_->resetWarmStart();
+        RCLCPP_WARN_THROTTLE(
+          node->get_logger(), *clock_, 500,
+          "setPlan: projected warm-start velocity to new path direction, anchor=(%.2f, %.2f)",
+          last_ux, last_uy);
+      }
+    }
+
     if (reset_warm_start_on_goal_change_only_) {
       if (goal_changed) {
         mpc_->resetWarmStart();

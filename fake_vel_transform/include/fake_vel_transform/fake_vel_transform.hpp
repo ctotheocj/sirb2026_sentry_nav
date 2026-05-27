@@ -81,7 +81,7 @@ private:
 
   std::mutex cmd_vel_mutex_;
   double current_robot_base_angle_;
-  rclcpp::Time last_controller_activate_time_;
+  bool has_robot_base_angle_{false};
   rclcpp::Time last_stamped_cmd_time_;
 
   // nav_yaw 融合角度

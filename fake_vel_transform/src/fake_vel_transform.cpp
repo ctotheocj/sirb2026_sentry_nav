@@ -25,8 +25,6 @@
 namespace fake_vel_transform
 {
 
-constexpr double CONTROLLER_TIMEOUT = 0.5;
-
 FakeVelTransform::FakeVelTransform(const rclcpp::NodeOptions & options)
 : Node("fake_vel_transform", options)
 {
@@ -78,7 +76,7 @@ FakeVelTransform::FakeVelTransform(const rclcpp::NodeOptions & options)
   nav_yaw_ = 0.0;
   nav_yaw_received_ = false;
   current_robot_base_angle_ = 0.0;
-  last_controller_activate_time_ = this->get_clock()->now();
+  has_robot_base_angle_ = false;
   last_stamped_cmd_time_ = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
 
   tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
@@ -134,14 +132,13 @@ void FakeVelTransform::cmdSpinCallback(const example_interfaces::msg::Float32::S
 
 void FakeVelTransform::odometryCallback(const nav_msgs::msg::Odometry::ConstSharedPtr & msg)
 {
-  if ((this->get_clock()->now() - last_controller_activate_time_).seconds() > CONTROLLER_TIMEOUT) {
-    std::lock_guard<std::mutex> lock(cmd_vel_mutex_);
-    if (use_nav_yaw_ && nav_yaw_received_) {
-      current_robot_base_angle_ = nav_yaw_;
-    } else {
-      current_robot_base_angle_ = tf2::getYaw(msg->pose.pose.orientation);
-    }
+  std::lock_guard<std::mutex> lock(cmd_vel_mutex_);
+  if (use_nav_yaw_ && nav_yaw_received_) {
+    current_robot_base_angle_ = nav_yaw_;
+  } else {
+    current_robot_base_angle_ = tf2::getYaw(msg->pose.pose.orientation);
   }
+  has_robot_base_angle_ = true;
 }
 
 void FakeVelTransform::cmdVelCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
@@ -152,6 +149,14 @@ void FakeVelTransform::cmdVelCallback(const geometry_msgs::msg::Twist::SharedPtr
     last_stamped_cmd_time_.nanoseconds() != 0 &&
     (now - last_stamped_cmd_time_).seconds() <= stamped_cmd_timeout_sec_;
   if (stamped_cmd_recent) {
+    return;
+  }
+
+  if (!has_robot_base_angle_) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 1000,
+      "Legacy cmd_vel received before odometry/nav yaw initialized; publishing zero command");
+    cmd_vel_chassis_pub_->publish(geometry_msgs::msg::Twist());
     return;
   }
 
@@ -197,8 +202,8 @@ void FakeVelTransform::cmdVelStampedCallback(
   {
     std::lock_guard<std::mutex> lock(cmd_vel_mutex_);
     current_robot_base_angle_ = yaw;
-    last_controller_activate_time_ = this->get_clock()->now();
-    last_stamped_cmd_time_ = last_controller_activate_time_;
+    has_robot_base_angle_ = true;
+    last_stamped_cmd_time_ = this->get_clock()->now();
   }
 
   cmd_vel_chassis_pub_->publish(aft_tf_vel);
@@ -209,6 +214,8 @@ void FakeVelTransform::navYawCallback(const std_msgs::msg::Float64::SharedPtr ms
   std::lock_guard<std::mutex> lock(cmd_vel_mutex_);
   nav_yaw_ = msg->data;
   nav_yaw_received_ = true;
+  current_robot_base_angle_ = nav_yaw_;
+  has_robot_base_angle_ = true;
 }
 
 void FakeVelTransform::publishTransform()

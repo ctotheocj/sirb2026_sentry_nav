@@ -309,8 +309,7 @@ bool HolePassModeController::syncActiveModeFromManager()
   active_exit_port_ = trigger.exit_port;
   active_entry_polygon_ = trigger.entry_polygon;
   active_exit_polygon_ = trigger.exit_polygon;
-  const double yaw_offset_deg = parameterOrInput("yaw_offset_deg", 0.0);
-  active_target_yaw_ = normalizeAngle(trigger.path_yaw + yaw_offset_deg * M_PI / 180.0);
+  active_target_yaw_ = targetYawFromParameter();
   if (!same_owner || was_idle) {
     last_refresh_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
   }
@@ -404,8 +403,7 @@ bool HolePassModeController::inferActiveTriggerFromManager(
 
 bool HolePassModeController::enterHoleMode(const Trigger & trigger, double robot_yaw)
 {
-  const double yaw_offset_deg = parameterOrInput("yaw_offset_deg", 0.0);
-  active_target_yaw_ = normalizeAngle(trigger.path_yaw + yaw_offset_deg * M_PI / 180.0);
+  active_target_yaw_ = targetYawFromParameter();
   active_v_yaw_ = activeVYaw(robot_yaw);
   if (!callSetNavigationMode(
       "hole_pass", trigger.hole_id, sentry_nav_interfaces::msg::HolePassCmd::HOLE_LOWER,
@@ -579,6 +577,12 @@ double HolePassModeController::activeVYaw(double robot_yaw)
   const double max_v_yaw = std::max(0.0, parameterOrInput("max_v_yaw", 1.8));
   const double yaw_error = normalizeAngle(active_target_yaw_ - robot_yaw);
   return std::clamp(yaw_kp * yaw_error, -max_v_yaw, max_v_yaw);
+}
+
+double HolePassModeController::targetYawFromParameter()
+{
+  const double target_yaw_deg = parameterOrInput("target_yaw_deg", 0.0);
+  return normalizeAngle(target_yaw_deg * M_PI / 180.0);
 }
 
 std::string HolePassModeController::paramPrefix() const

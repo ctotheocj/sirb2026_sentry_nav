@@ -52,6 +52,12 @@ public:
 
   void clearObstacles();
 
+  void setReferenceDirectionConstraints(
+    const std::vector<Eigen::Vector2d> & tangents,
+    double max_reverse_speed,
+    double max_lateral_speed,
+    bool enabled);
+
   SolveResult solve(const State & current,
                     const std::vector<State> & ref,
                     const std::vector<State> & v_ref);
@@ -83,6 +89,7 @@ private:
   Eigen::MatrixXd linear_f_mapping_;
 
   int obs_row_offset_;
+  int direction_row_offset_;
   Eigen::MatrixXd A_dense_;
   Eigen::SparseMatrix<double> A_sparse_;
 

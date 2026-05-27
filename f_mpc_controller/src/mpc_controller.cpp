@@ -93,6 +93,10 @@ void MpcController::declareParameters(
     rclcpp::ParameterValue(true));
   declare_parameter_if_not_declared(node, plugin_name_ + ".odom_topic",
     rclcpp::ParameterValue("odometry"));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".state_frame",
+    rclcpp::ParameterValue(std::string("")));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".command_frame",
+    rclcpp::ParameterValue(std::string("")));
   declare_parameter_if_not_declared(node, plugin_name_ + ".max_odom_age_sec",
     rclcpp::ParameterValue(0.80));
   declare_parameter_if_not_declared(node, plugin_name_ + ".max_odom_predict_dt",
@@ -121,6 +125,12 @@ void MpcController::declareParameters(
                                     rclcpp::ParameterValue(0.05));
   declare_parameter_if_not_declared(node, plugin_name_ + ".reverse_guard_allowance",
                                     rclcpp::ParameterValue(0.03));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".reference_direction_constraints_enabled",
+                                    rclcpp::ParameterValue(true));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".max_reverse_speed",
+                                    rclcpp::ParameterValue(0.0));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".max_lateral_correction_speed",
+                                    rclcpp::ParameterValue(0.6));
   declare_parameter_if_not_declared(node, plugin_name_ + ".collision_stop_failure_sec",
                                     rclcpp::ParameterValue(0.8));
   declare_parameter_if_not_declared(node, plugin_name_ + ".minco_timeout_sec",
@@ -226,6 +236,19 @@ void MpcController::loadParameters(
   node->get_parameter(plugin_name_ + ".brake_safety_factor", brake_safety_factor_);
   node->get_parameter(plugin_name_ + ".use_odometry_state", use_odometry_state_);
   node->get_parameter(plugin_name_ + ".odom_topic", odom_topic_);
+  node->get_parameter(plugin_name_ + ".state_frame", state_frame_);
+  node->get_parameter(plugin_name_ + ".command_frame", command_frame_);
+  if (state_frame_.empty()) {
+    state_frame_ = costmap_ros_->getBaseFrameID();
+    RCLCPP_WARN(
+      node->get_logger(),
+      "FollowPath.state_frame is empty; falling back to Nav2 base frame '%s'. "
+      "Set state_frame explicitly when using a fake command frame.",
+      state_frame_.c_str());
+  }
+  if (command_frame_.empty()) {
+    command_frame_ = costmap_ros_->getBaseFrameID();
+  }
   node->get_parameter(plugin_name_ + ".max_odom_age_sec", max_odom_age_sec_);
   node->get_parameter(plugin_name_ + ".max_odom_predict_dt", max_odom_predict_dt_);
   node->get_parameter(
@@ -248,6 +271,14 @@ void MpcController::loadParameters(
   node->get_parameter(plugin_name_ + ".prevent_tracking_reverse", prevent_tracking_reverse_);
   node->get_parameter(plugin_name_ + ".reverse_guard_min_ref_speed", reverse_guard_min_ref_speed_);
   node->get_parameter(plugin_name_ + ".reverse_guard_allowance", reverse_guard_allowance_);
+  node->get_parameter(
+    plugin_name_ + ".reference_direction_constraints_enabled",
+    reference_direction_constraints_enabled_);
+  node->get_parameter(plugin_name_ + ".max_reverse_speed", max_reverse_speed_);
+  max_reverse_speed_ = std::max(0.0, max_reverse_speed_);
+  node->get_parameter(
+    plugin_name_ + ".max_lateral_correction_speed", max_lateral_correction_speed_);
+  max_lateral_correction_speed_ = std::max(0.0, max_lateral_correction_speed_);
   node->get_parameter(plugin_name_ + ".collision_stop_failure_sec", collision_stop_failure_sec_);
   node->get_parameter(plugin_name_ + ".minco_timeout_sec", minco_timeout_sec_);
   node->get_parameter(plugin_name_ + ".minco_goal_reset_tolerance", minco_goal_reset_tolerance_);
@@ -368,6 +399,38 @@ void MpcController::validateParameters(
       "velocity_anchor_max_age_sec %.3f disables measured velocity anchoring",
       velocity_anchor_max_age_sec_);
   }
+  if (state_frame_.empty() || command_frame_.empty()) {
+    RCLCPP_WARN(
+      node->get_logger(),
+      "MPC frame contract incomplete: state_frame='%s' command_frame='%s'",
+      state_frame_.c_str(), command_frame_.c_str());
+  }
+  if (state_frame_ != costmap_ros_->getBaseFrameID() ||
+      command_frame_ != costmap_ros_->getBaseFrameID())
+  {
+    RCLCPP_INFO(
+      node->get_logger(),
+      "MPC frame contract: Nav2 base='%s' state_frame='%s' command_frame='%s'",
+      costmap_ros_->getBaseFrameID().c_str(), state_frame_.c_str(), command_frame_.c_str());
+  }
+  if (reference_direction_constraints_enabled_ &&
+      max_lateral_correction_speed_ <= 1.0e-6)
+  {
+    RCLCPP_WARN(
+      node->get_logger(),
+      "reference_direction_constraints_enabled=true but max_lateral_correction_speed is %.3f; "
+      "tracking may become infeasible on lateral error",
+      max_lateral_correction_speed_);
+  }
+  if (reference_direction_constraints_enabled_ &&
+      max_lateral_correction_speed_ > v_ref_max_base_)
+  {
+    RCLCPP_WARN(
+      node->get_logger(),
+      "max_lateral_correction_speed %.2f is above v_ref_max %.2f; direction constraints will not "
+      "meaningfully limit sideways tracking",
+      max_lateral_correction_speed_, v_ref_max_base_);
+  }
   if (minco_timeout_sec_ < 2.0 / std::max(control_frequency_, 1.0)) {
     RCLCPP_WARN(
       node->get_logger(),
@@ -419,20 +482,29 @@ void MpcController::deactivate()
 }
 
 bool MpcController::lookupControlTransform(
-  tf2::Transform & base_to_odom_tf,
+  tf2::Transform & state_to_odom_tf,
+  tf2::Transform & command_to_odom_tf,
   rclcpp::Time & state_tf_stamp)
 {
   // 获取当前控制周期使用的机器人位姿 TF，失败时直接输出停止命令。
   auto node = node_.lock();
   try {
-    auto ts = tf_->lookupTransform(
-      costmap_ros_->getGlobalFrameID(), costmap_ros_->getBaseFrameID(), tf2::TimePointZero);
-    tf2::fromMsg(ts.transform, base_to_odom_tf);
-    state_tf_stamp = rclcpp::Time(ts.header.stamp);
+    const std::string global_frame = costmap_ros_->getGlobalFrameID();
+    auto state_ts = tf_->lookupTransform(global_frame, state_frame_, tf2::TimePointZero);
+    tf2::fromMsg(state_ts.transform, state_to_odom_tf);
+    state_tf_stamp = rclcpp::Time(state_ts.header.stamp);
+
+    if (command_frame_ == state_frame_) {
+      command_to_odom_tf = state_to_odom_tf;
+    } else {
+      auto command_ts = tf_->lookupTransform(global_frame, command_frame_, tf2::TimePointZero);
+      tf2::fromMsg(command_ts.transform, command_to_odom_tf);
+    }
   } catch (tf2::TransformException & ex) {
     if (node) {
       RCLCPP_WARN_THROTTLE(node->get_logger(), *clock_, 500,
-        "computeVelocityCommands: TF failed: %s — stopping", ex.what());
+        "computeVelocityCommands: TF failed for state_frame='%s' command_frame='%s': %s — stopping",
+        state_frame_.c_str(), command_frame_.c_str(), ex.what());
     }
     return false;
   }
@@ -586,6 +658,7 @@ void MpcController::updateMeasuredVelocityAnchor(
     vy_global - filtered_velocity_anchor_y_);
   if (velocity_anchor_max_jump_ > 0.0 && jump > velocity_anchor_max_jump_) {
     has_measured_velocity_anchor_ = false;
+    has_filtered_velocity_anchor_ = false;
     if (auto node = node_.lock()) {
       RCLCPP_WARN_THROTTLE(
         node->get_logger(), *clock_, 500,
@@ -605,7 +678,104 @@ void MpcController::updateMeasuredVelocityAnchor(
   has_measured_velocity_anchor_ = true;
 }
 
-void MpcController::updateMpcVelocityAnchor()
+bool MpcController::computeReferenceTangent(
+  Eigen::Vector2d & tangent, int index, double r_x, double r_y) const
+{
+  tangent = Eigen::Vector2d::Zero();
+  if (index < 0) {
+    return false;
+  }
+
+  if (index < static_cast<int>(v_ref_.size())) {
+    const auto & v = v_ref_[index];
+    tangent = Eigen::Vector2d(v.x, v.y);
+    if (tangent.norm() > reverse_guard_min_ref_speed_) {
+      tangent.normalize();
+      return true;
+    }
+  }
+
+  if (index + 1 < static_cast<int>(ref.size())) {
+    tangent = Eigen::Vector2d(ref[index + 1].x - ref[index].x, ref[index + 1].y - ref[index].y);
+    if (tangent.norm() > 1.0e-4) {
+      tangent.normalize();
+      return true;
+    }
+  }
+
+  if (index < static_cast<int>(ref.size())) {
+    tangent = Eigen::Vector2d(ref[index].x - r_x, ref[index].y - r_y);
+    if (tangent.norm() > 1.0e-4) {
+      tangent.normalize();
+      return true;
+    }
+  }
+
+  if (ref.size() >= 2) {
+    tangent = Eigen::Vector2d(ref.back().x - ref.front().x, ref.back().y - ref.front().y);
+    if (tangent.norm() > 1.0e-4) {
+      tangent.normalize();
+      return true;
+    }
+  }
+
+  return false;
+}
+
+std::vector<Eigen::Vector2d> MpcController::buildReferenceTangents(double r_x, double r_y) const
+{
+  std::vector<Eigen::Vector2d> tangents;
+  tangents.reserve(horizon_);
+  Eigen::Vector2d last_valid = Eigen::Vector2d::Zero();
+  bool has_last_valid = false;
+  for (int i = 0; i < horizon_; ++i) {
+    Eigen::Vector2d tangent;
+    if (computeReferenceTangent(tangent, i, r_x, r_y)) {
+      last_valid = tangent;
+      has_last_valid = true;
+      tangents.push_back(tangent);
+    } else if (has_last_valid) {
+      tangents.push_back(last_valid);
+    } else {
+      tangents.push_back(Eigen::Vector2d::Zero());
+    }
+  }
+  return tangents;
+}
+
+Eigen::Vector2d MpcController::constrainReferenceVelocity(
+  const Eigen::Vector2d & velocity,
+  double r_x,
+  double r_y,
+  bool * changed) const
+{
+  if (changed) {
+    *changed = false;
+  }
+  if (!reference_direction_constraints_enabled_) {
+    return velocity;
+  }
+
+  Eigen::Vector2d tangent;
+  if (!computeReferenceTangent(tangent, 0, r_x, r_y)) {
+    return velocity;
+  }
+
+  const Eigen::Vector2d normal(-tangent.y(), tangent.x());
+  double longitudinal = velocity.dot(tangent);
+  double lateral = velocity.dot(normal);
+  const double constrained_longitudinal = std::max(longitudinal, -max_reverse_speed_);
+  const double constrained_lateral =
+    std::clamp(lateral, -max_lateral_correction_speed_, max_lateral_correction_speed_);
+  if (changed) {
+    *changed =
+      std::abs(constrained_longitudinal - longitudinal) > 1.0e-6 ||
+      std::abs(constrained_lateral - lateral) > 1.0e-6;
+  }
+  return constrained_longitudinal * tangent + constrained_lateral * normal;
+}
+
+void MpcController::updateMpcVelocityAnchor(double r_x, double r_y)
 {
   current_velocity_anchor_valid_ = false;
   velocity_anchor_x_ = last_ux;
@@ -632,7 +802,36 @@ void MpcController::updateMpcVelocityAnchor()
     current_velocity_anchor_valid_ = true;
   }
 
+  bool anchor_changed = false;
+  const Eigen::Vector2d constrained_anchor = constrainReferenceVelocity(
+    Eigen::Vector2d(velocity_anchor_x_, velocity_anchor_y_), r_x, r_y, &anchor_changed);
+  velocity_anchor_x_ = constrained_anchor.x();
+  velocity_anchor_y_ = constrained_anchor.y();
+  if (anchor_changed) {
+    mpc_->resetWarmStart();
+    if (auto node = node_.lock()) {
+      RCLCPP_WARN_THROTTLE(
+        node->get_logger(), *clock_, 500,
+        "MPC velocity anchor constrained to reference direction: raw=(%.2f, %.2f) constrained=(%.2f, %.2f)",
+        measured_valid ? filtered_velocity_anchor_x_ : last_ux,
+        measured_valid ? filtered_velocity_anchor_y_ : last_uy,
+        velocity_anchor_x_, velocity_anchor_y_);
+    }
+  }
+
   mpc_->setControlAnchorU(velocity_anchor_x_, velocity_anchor_y_);
+}
+
+void MpcController::updateReferenceDirectionConstraints(double r_x, double r_y)
+{
+  if (!mpc_) {
+    return;
+  }
+  mpc_->setReferenceDirectionConstraints(
+    buildReferenceTangents(r_x, r_y),
+    max_reverse_speed_,
+    max_lateral_correction_speed_,
+    reference_direction_constraints_enabled_);
 }
 
 double MpcController::currentVelocityAnchorSpeed() const
@@ -735,6 +934,7 @@ bool MpcController::handleInvalidOrFailedSolve(
     mpc_->setControlAnchorU(0.0, 0.0);
     mpc_->resetWarmStart();
     cmd_out = geometry_msgs::msg::TwistStamped();
+    cmd_out.header = cmd_header;
     return true;
   }
 
@@ -980,38 +1180,57 @@ geometry_msgs::msg::TwistStamped MpcController::computeVelocityCommands(
     throw nav2_core::PlannerException("MPC has no global path");
   }
 
-  tf2::Transform base_to_odom_tf;
+  tf2::Transform state_to_odom_tf;
+  tf2::Transform command_to_odom_tf;
   rclcpp::Time state_tf_stamp = clock_->now();
-  if (!lookupControlTransform(base_to_odom_tf, state_tf_stamp)) {
+  if (!lookupControlTransform(state_to_odom_tf, command_to_odom_tf, state_tf_stamp)) {
     return geometry_msgs::msg::TwistStamped();
   }
   const double tf_ms = mark_ms();
 
   double state_time_sec = clock_->now().seconds();
-  const bool using_odom_state = getOdomControlState(base_to_odom_tf, state_time_sec);
+  const bool using_odom_state = getOdomControlState(state_to_odom_tf, state_time_sec);
   if (using_odom_state) {
+    if (command_frame_ == state_frame_) {
+      command_to_odom_tf = state_to_odom_tf;
+    } else {
+      try {
+        auto command_ts = tf_->lookupTransform(
+          costmap_ros_->getGlobalFrameID(), command_frame_, tf2::TimePointZero);
+        tf2::fromMsg(command_ts.transform, command_to_odom_tf);
+      } catch (tf2::TransformException & ex) {
+        RCLCPP_WARN_THROTTLE(
+          node->get_logger(), *clock_, 500,
+          "computeVelocityCommands: command_frame TF failed after odom state update '%s': %s",
+          command_frame_.c_str(), ex.what());
+        return geometry_msgs::msg::TwistStamped();
+      }
+    }
     RCLCPP_DEBUG_THROTTLE(node->get_logger(), *clock_, 1000,
       "computeVelocityCommands: using odometry state");
   }
 
+  pose_.header = pose.header;
+  pose_.header.frame_id = costmap_ros_->getGlobalFrameID();
   // Keep the controller state aligned with the TF/odometry pose used for control.
-  pose_.pose.position.x = base_to_odom_tf.getOrigin().x();
-  pose_.pose.position.y = base_to_odom_tf.getOrigin().y();
+  pose_.pose.position.x = state_to_odom_tf.getOrigin().x();
+  pose_.pose.position.y = state_to_odom_tf.getOrigin().y();
+  pose_.pose.orientation = tf2::toMsg(state_to_odom_tf.getRotation());
 
   double pose_jump_speed_scale = applyPoseJumpDamping(
-    base_to_odom_tf, state_tf_stamp, using_odom_state, state_time_sec);
+    state_to_odom_tf, state_tf_stamp, using_odom_state, state_time_sec);
   const double state_ms = mark_ms();
 
-  const double r_x = base_to_odom_tf.getOrigin().x();
-  const double r_y = base_to_odom_tf.getOrigin().y();
+  const double r_x = state_to_odom_tf.getOrigin().x();
+  const double r_y = state_to_odom_tf.getOrigin().y();
 
   updateTargetIndex();
   updateEffectiveReferenceSpeed(r_x, r_y, pose_jump_speed_scale);
-  generateReferenceTrajectory(base_to_odom_tf);
+  generateReferenceTrajectory(state_to_odom_tf);
   const double ref_ms = mark_ms();
 
   if (reference_waiting_for_minco_) {
-    publishLocalPath(base_to_odom_tf);
+    publishLocalPath(state_to_odom_tf);
     const double wait_publish_ms = mark_ms();
     const double total_ms = std::chrono::duration<double, std::milli>(
       SteadyClock::now() - t_start).count();
@@ -1039,19 +1258,21 @@ geometry_msgs::msg::TwistStamped MpcController::computeVelocityCommands(
     }
     geometry_msgs::msg::TwistStamped stop_cmd;
     stop_cmd.header = pose.header;
+    stop_cmd.header.frame_id = command_frame_;
     return stop_cmd;
   }
   minco_unavailable_since_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
 
-  double yaw = tf2::getYaw(base_to_odom_tf.getRotation());
+  double yaw = tf2::getYaw(command_to_odom_tf.getRotation());
   double cp = std::cos(yaw), sp = std::sin(yaw);
 
   const auto p_prev = buildPreviousPrediction(r_x, r_y);
   const double prev_ms = mark_ms();
   int active_count = applyObstacleAndEsdfConstraints(r_x, r_y, p_prev);
   const double obs_ms = mark_ms();
-  updateMpcVelocityAnchor();
+  updateMpcVelocityAnchor(r_x, r_y);
   applyHorizonSpeedLimitFloor();
+  updateReferenceDirectionConstraints(r_x, r_y);
   const double limit_ms = mark_ms();
   SolveResult solve = solveMpcWithFallbacks(r_x, r_y, active_count);
   const double solve_ms = mark_ms();
@@ -1072,18 +1293,22 @@ geometry_msgs::msg::TwistStamped MpcController::computeVelocityCommands(
       "MPC solve diag: success=%d status=%d u=(%.3f, %.3f) ref0_dist=%.2f ref0_v=%.2f "
       "speed_limit=[%.2f, %.2f] curv_min=%.2f time_scale=%.2f "
       "cmd_last=(%.2f, %.2f) odom_vel=(%.2f, %.2f) anchor=(%.2f, %.2f) anchor_valid=%d "
-      "ref_s=%.2f ref_total=%.2f ref_valid=%d path_s=%.2f path_total=%.2f active_obs=%d",
+      "frames state='%s' cmd='%s' ref_s=%.2f ref_total=%.2f ref_valid=%d "
+      "path_s=%.2f path_total=%.2f active_obs=%d",
       solve.success ? 1 : 0, static_cast<int>(solve.status), u.vx, u.vy,
       ref0_dist_diag, ref0_speed_diag, min_limit_diag, max_limit_diag,
       last_min_curvature_speed_limit_, last_ref_time_scale_,
       last_ux, last_uy, measured_velocity_raw_x_, measured_velocity_raw_y_,
       velocity_anchor_x_, velocity_anchor_y_, current_velocity_anchor_valid_ ? 1 : 0,
+      state_frame_.c_str(), command_frame_.c_str(),
       reference_current_s_, reference_total_dist_, reference_distance_valid_ ? 1 : 0,
       current_s_, path_total_dist_, active_count);
   }
 
   geometry_msgs::msg::TwistStamped cmd;
-  if (handleInvalidOrFailedSolve(solve, active_count, base_to_odom_tf, pose.header, cmd)) {
+  auto cmd_header = pose.header;
+  cmd_header.frame_id = command_frame_;
+  if (handleInvalidOrFailedSolve(solve, active_count, state_to_odom_tf, cmd_header, cmd)) {
     const double failed_ms = mark_ms();
     const double total_ms = std::chrono::duration<double, std::milli>(
       SteadyClock::now() - t_start).count();
@@ -1096,10 +1321,10 @@ geometry_msgs::msg::TwistStamped MpcController::computeVelocityCommands(
     return cmd;
   }
 
-  publishLocalPath(base_to_odom_tf);
+  publishLocalPath(state_to_odom_tf);
   const double publish_ms = mark_ms();
 
-  cmd.header = pose.header;
+  cmd.header = cmd_header;
 
   if (checkPredictedCollision(r_x, r_y, cmd)) {
     const double collision_ms = mark_ms();
@@ -1114,7 +1339,7 @@ geometry_msgs::msg::TwistStamped MpcController::computeVelocityCommands(
     return cmd;
   }
 
-  // Convert MPC output (odom) → base frame
+  // Convert MPC output from odom/global frame to the configured command frame.
   cmd.twist.linear.x =  cp * u.vx + sp * u.vy;
   cmd.twist.linear.y = -sp * u.vx + cp * u.vy;
   enforceNoReverseTrackingCommand(cmd, r_x, r_y, cp, sp);

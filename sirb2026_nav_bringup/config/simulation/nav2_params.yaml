@@ -279,7 +279,7 @@ bt_navigator:
     wait_for_service_timeout: 1000
     use_dynamic_obstacles: false
     hole_pass:
-      yaw_offset_deg: 0.0
+      target_yaw_deg: 0.0
       yaw_kp: 2.5
       max_v_yaw: 1.8
       raise_duration_sec: 1.0
@@ -290,8 +290,8 @@ bt_navigator:
       hole_ids: ["hole_1", "hole_2"]
       holes:
         hole_1:
-          port_a_polygon: [8.31, 2.79, 8.07, -2.58, 6.43, -2.46, 6.64, 2.56]
-          port_b_polygon: [3.16, -3.07, 3.33, -7.6, 1.08, -8.18, 1.29, -2.39]
+          port_a_polygon: [2.08, 3.07, 1.97, -2.02, 1.0, -1.94, 0.829, 3.13]
+          port_b_polygon: [5.0, 2.84, 4.81, -2.11, 3.85, -1.9, 3.74, 3.22]
         hole_2:
           port_a_polygon: [999.0, 1001.0, 999.5, 1001.0, 999.5, 1001.5, 999.0, 1001.5]
           port_b_polygon: [1000.0, 1001.0, 1000.5, 1001.0, 1000.5, 1001.5, 1000.0, 1001.5]
@@ -360,6 +360,8 @@ controller_server:
       brake_safety_factor: 0.8
       use_odometry_state: true
       odom_topic: odometry
+      state_frame: gimbal_yaw
+      command_frame: gimbal_yaw_fake
       max_odom_age_sec: 0.8
       max_odom_predict_dt: 0.1
       enable_measured_velocity_anchor: true
@@ -399,6 +401,9 @@ controller_server:
       prevent_tracking_reverse: true
       reverse_guard_min_ref_speed: 0.05
       reverse_guard_allowance: 0.03
+      reference_direction_constraints_enabled: true
+      max_reverse_speed: 0.0
+      max_lateral_correction_speed: 0.6
       collision_stop_failure_sec: 1.0
       allow_obstacle_retry_without_constraints: false
       allow_speed_limit_retry_without_limits: false
@@ -564,6 +569,7 @@ smoother_server:
       minco_trapezoidal_k_angle: 0.3
       reuse_cached_trajectory_on_minco_failure: false
       allow_reference_fallback_on_bad_geometry: true
+
 trajectory_manager:
   ros__parameters:
     use_sim_time: true
@@ -706,8 +712,13 @@ yaw_fusion:
   ros__parameters:
     odom_topic: odometry
     debug_logging: false
-    v_yaw_topic: /serial/v_yaw
     max_predict_dt: 0.15
+    yaw_rate:
+      enable: true
+      topic: /serial/v_yaw
+      sign: 1.0
+      max_abs: 12.0
+      timeout: 0.05
 
 dodge_manager:
   ros__parameters:

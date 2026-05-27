@@ -66,7 +66,7 @@ public:
 protected:
   double computeDistanceToGoal(const geometry_msgs::msg::PoseStamped & current_pose);
   void publishLocalPath(const tf2::Transform & base_to_odom_tf);
-  bool getOdomControlState(tf2::Transform & base_to_odom_tf, double & state_time_sec);
+  bool getOdomControlState(tf2::Transform & state_to_odom_tf, double & state_time_sec);
   void updateTargetIndex();
   void generateReferenceTrajectory(const tf2::Transform & base_to_odom_tf);
   double computeReferenceTimeScale() const;
@@ -119,7 +119,8 @@ private:
     double ay_max);
 
   bool lookupControlTransform(
-    tf2::Transform & base_to_odom_tf,
+    tf2::Transform & state_to_odom_tf,
+    tf2::Transform & command_to_odom_tf,
     rclcpp::Time & state_tf_stamp);
   double applyPoseJumpDamping(
     const tf2::Transform & base_to_odom_tf,
@@ -140,7 +141,15 @@ private:
     double vy_global,
     const rclcpp::Time & now,
     double odom_age_sec);
-  void updateMpcVelocityAnchor();
+  bool computeReferenceTangent(Eigen::Vector2d & tangent, int index, double r_x, double r_y) const;
+  std::vector<Eigen::Vector2d> buildReferenceTangents(double r_x, double r_y) const;
+  Eigen::Vector2d constrainReferenceVelocity(
+    const Eigen::Vector2d & velocity,
+    double r_x,
+    double r_y,
+    bool * changed = nullptr) const;
+  void updateMpcVelocityAnchor(double r_x, double r_y);
+  void updateReferenceDirectionConstraints(double r_x, double r_y);
   double currentVelocityAnchorSpeed() const;
   void applyHorizonSpeedLimitFloor();
   SolveResult solveMpcWithFallbacks(double r_x, double r_y, int active_count);
@@ -240,6 +249,8 @@ private:
   mutable std::mutex traj_mutex_;
   std::string minco_traj_topic_;
   std::string minco_traj_frame_;
+  std::string state_frame_;
+  std::string command_frame_;
   rclcpp::Time minco_start_time_{0, 0, RCL_ROS_TIME};
   double minco_start_offset_sec_{0.0};
   double minco_time_base_offset_sec_{0.0};
@@ -283,6 +294,9 @@ private:
   bool prevent_tracking_reverse_{true};
   double reverse_guard_min_ref_speed_{0.05};
   double reverse_guard_allowance_{0.03};
+  bool reference_direction_constraints_enabled_{true};
+  double max_reverse_speed_{0.0};
+  double max_lateral_correction_speed_{0.6};
   double collision_stop_failure_sec_{0.8};
   rclcpp::Time collision_stop_since_{0, 0, RCL_ROS_TIME};
 
