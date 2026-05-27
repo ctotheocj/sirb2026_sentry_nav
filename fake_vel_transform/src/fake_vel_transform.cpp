@@ -47,6 +47,10 @@ FakeVelTransform::FakeVelTransform(const rclcpp::NodeOptions & options)
   this->declare_parameter<float>("init_spin_speed", 0.0);
   this->declare_parameter<bool>("use_nav_yaw", false);
   this->declare_parameter<std::string>("nav_yaw_topic", "/Nav_yaw");
+  this->declare_parameter<bool>("hole_pass_lower_protection_enabled", false);
+  this->declare_parameter<std::string>("hole_pass_cmd_topic", "mpc/hole_pass_cmd");
+  this->declare_parameter<std::string>("hole_pass_state_topic", "serial/hole_pass_state");
+  this->declare_parameter<double>("hole_pass_state_timeout_sec", 0.25);
 
   this->get_parameter("robot_base_frame", robot_base_frame_);
   this->get_parameter("fake_robot_base_frame", fake_robot_base_frame_);
@@ -68,16 +72,23 @@ FakeVelTransform::FakeVelTransform(const rclcpp::NodeOptions & options)
   spin_speed_.store(initial_spin_speed);
   this->get_parameter("use_nav_yaw", use_nav_yaw_);
   this->get_parameter("nav_yaw_topic", nav_yaw_topic_);
+  this->get_parameter(
+    "hole_pass_lower_protection_enabled", hole_pass_lower_protection_enabled_);
+  this->get_parameter("hole_pass_cmd_topic", hole_pass_cmd_topic_);
+  this->get_parameter("hole_pass_state_topic", hole_pass_state_topic_);
+  this->get_parameter("hole_pass_state_timeout_sec", hole_pass_state_timeout_sec_);
 
   stamped_cmd_timeout_sec_ = std::min(stamped_cmd_timeout_sec_, max_latest_cmd_age_sec);
   tf_lookup_timeout_sec_ = std::max(0.0, tf_lookup_timeout_sec_);
   stamped_cmd_timeout_sec_ = std::max(0.0, stamped_cmd_timeout_sec_);
+  hole_pass_state_timeout_sec_ = std::max(0.0, hole_pass_state_timeout_sec_);
 
   nav_yaw_ = 0.0;
   nav_yaw_received_ = false;
   current_robot_base_angle_ = 0.0;
   has_robot_base_angle_ = false;
   last_stamped_cmd_time_ = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
+  last_hole_pass_state_time_ = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
 
   tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
@@ -95,6 +106,20 @@ FakeVelTransform::FakeVelTransform(const rclcpp::NodeOptions & options)
     cmd_vel_stamped_sub_ = this->create_subscription<geometry_msgs::msg::TwistStamped>(
       input_cmd_vel_stamped_topic_, 10,
       std::bind(&FakeVelTransform::cmdVelStampedCallback, this, std::placeholders::_1));
+  }
+  if (hole_pass_lower_protection_enabled_) {
+    hole_pass_cmd_sub_ = this->create_subscription<sentry_nav_interfaces::msg::HolePassCmd>(
+      hole_pass_cmd_topic_, 10,
+      std::bind(&FakeVelTransform::holePassCommandCallback, this, std::placeholders::_1));
+    hole_pass_state_sub_ = this->create_subscription<sentry_nav_interfaces::msg::HolePassState>(
+      hole_pass_state_topic_, 10,
+      std::bind(&FakeVelTransform::holePassStateCallback, this, std::placeholders::_1));
+    RCLCPP_INFO(
+      get_logger(),
+      "Hole-pass lower protection enabled: cmd_topic='%s' state_topic='%s' "
+      "state_timeout=%.3fs",
+      hole_pass_cmd_topic_.c_str(), hole_pass_state_topic_.c_str(),
+      hole_pass_state_timeout_sec_);
   }
 
   // 根据参数决定是否订阅融合 yaw（替代 odom yaw）
@@ -161,6 +186,13 @@ void FakeVelTransform::cmdVelCallback(const geometry_msgs::msg::Twist::SharedPtr
   }
 
   auto aft_tf_vel = transformVelocity(*msg, current_robot_base_angle_);
+  if (shouldBlockForHolePassLowering(now)) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 1000,
+      "Hole-pass lower protection holding cmd_vel at zero: waiting for state LOWERING/LOWERED");
+    cmd_vel_chassis_pub_->publish(geometry_msgs::msg::Twist());
+    return;
+  }
   cmd_vel_chassis_pub_->publish(aft_tf_vel);
 }
 
@@ -199,14 +231,41 @@ void FakeVelTransform::cmdVelStampedCallback(
       msg->header.frame_id.c_str(), yaw, msg->twist.linear.x, msg->twist.linear.y,
       msg->twist.angular.z, aft_tf_vel.linear.x, aft_tf_vel.linear.y, aft_tf_vel.angular.z);
   }
+  bool block_for_hole_pass_lowering = false;
   {
     std::lock_guard<std::mutex> lock(cmd_vel_mutex_);
     current_robot_base_angle_ = yaw;
     has_robot_base_angle_ = true;
     last_stamped_cmd_time_ = this->get_clock()->now();
+    block_for_hole_pass_lowering = shouldBlockForHolePassLowering(last_stamped_cmd_time_);
+  }
+
+  if (block_for_hole_pass_lowering) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 1000,
+      "Hole-pass lower protection holding stamped cmd_vel at zero: waiting for state "
+      "LOWERING/LOWERED");
+    cmd_vel_chassis_pub_->publish(geometry_msgs::msg::Twist());
+    return;
   }
 
   cmd_vel_chassis_pub_->publish(aft_tf_vel);
+}
+
+void FakeVelTransform::holePassCommandCallback(
+  const sentry_nav_interfaces::msg::HolePassCmd::SharedPtr msg)
+{
+  std::lock_guard<std::mutex> lock(cmd_vel_mutex_);
+  hole_pass_command_is_lower_ =
+    msg->hole_cmd == sentry_nav_interfaces::msg::HolePassCmd::HOLE_LOWER;
+}
+
+void FakeVelTransform::holePassStateCallback(
+  const sentry_nav_interfaces::msg::HolePassState::SharedPtr msg)
+{
+  std::lock_guard<std::mutex> lock(cmd_vel_mutex_);
+  hole_pass_state_ = msg->state;
+  last_hole_pass_state_time_ = this->get_clock()->now();
 }
 
 void FakeVelTransform::navYawCallback(const std_msgs::msg::Float64::SharedPtr msg)
@@ -216,6 +275,24 @@ void FakeVelTransform::navYawCallback(const std_msgs::msg::Float64::SharedPtr ms
   nav_yaw_received_ = true;
   current_robot_base_angle_ = nav_yaw_;
   has_robot_base_angle_ = true;
+}
+
+bool FakeVelTransform::shouldBlockForHolePassLowering(const rclcpp::Time & now) const
+{
+  if (!hole_pass_lower_protection_enabled_ || !hole_pass_command_is_lower_) {
+    return false;
+  }
+  const bool state_is_lower =
+    hole_pass_state_ == sentry_nav_interfaces::msg::HolePassState::STATE_LOWERING ||
+    hole_pass_state_ == sentry_nav_interfaces::msg::HolePassState::STATE_LOWERED;
+  if (!state_is_lower) {
+    return true;
+  }
+  if (last_hole_pass_state_time_.nanoseconds() == 0) {
+    return true;
+  }
+  return hole_pass_state_timeout_sec_ > 0.0 &&
+    (now - last_hole_pass_state_time_).seconds() > hole_pass_state_timeout_sec_;
 }
 
 void FakeVelTransform::publishTransform()

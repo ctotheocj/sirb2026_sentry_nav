@@ -26,6 +26,8 @@
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "sentry_nav_interfaces/msg/hole_pass_cmd.hpp"
+#include "sentry_nav_interfaces/msg/hole_pass_state.hpp"
 #include "std_msgs/msg/float64.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_broadcaster.h"
@@ -43,8 +45,11 @@ private:
   void cmdVelCallback(const geometry_msgs::msg::Twist::SharedPtr msg);
   void cmdVelStampedCallback(const geometry_msgs::msg::TwistStamped::SharedPtr msg);
   void cmdSpinCallback(example_interfaces::msg::Float32::SharedPtr msg);
+  void holePassCommandCallback(const sentry_nav_interfaces::msg::HolePassCmd::SharedPtr msg);
+  void holePassStateCallback(const sentry_nav_interfaces::msg::HolePassState::SharedPtr msg);
   void publishTransform();
   void navYawCallback(const std_msgs::msg::Float64::SharedPtr msg);
+  bool shouldBlockForHolePassLowering(const rclcpp::Time & now) const;
   geometry_msgs::msg::Twist transformVelocity(
     const geometry_msgs::msg::Twist & twist, double yaw_diff) const;
   bool lookupRobotBaseYaw(const rclcpp::Time & stamp, double * yaw);
@@ -55,6 +60,8 @@ private:
   rclcpp::Subscription<example_interfaces::msg::Float32>::SharedPtr cmd_spin_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr nav_yaw_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  rclcpp::Subscription<sentry_nav_interfaces::msg::HolePassCmd>::SharedPtr hole_pass_cmd_sub_;
+  rclcpp::Subscription<sentry_nav_interfaces::msg::HolePassState>::SharedPtr hole_pass_state_sub_;
 
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_chassis_pub_;
 
@@ -79,6 +86,11 @@ private:
   double stamped_cmd_timeout_sec_;
   std::atomic<float> spin_speed_{0.0F};
 
+  bool hole_pass_lower_protection_enabled_{false};
+  std::string hole_pass_cmd_topic_;
+  std::string hole_pass_state_topic_;
+  double hole_pass_state_timeout_sec_{0.25};
+
   std::mutex cmd_vel_mutex_;
   double current_robot_base_angle_;
   bool has_robot_base_angle_{false};
@@ -89,6 +101,10 @@ private:
   std::string nav_yaw_topic_;
   double nav_yaw_;
   bool nav_yaw_received_;
+
+  bool hole_pass_command_is_lower_{false};
+  uint8_t hole_pass_state_{sentry_nav_interfaces::msg::HolePassState::STATE_STAND};
+  rclcpp::Time last_hole_pass_state_time_;
 };
 
 }  // namespace fake_vel_transform

@@ -153,6 +153,10 @@ fake_vel_transform:
     init_spin_speed: 3.14
     use_nav_yaw: false
     nav_yaw_topic: "/Nav_yaw"
+    hole_pass_lower_protection_enabled: false
+    hole_pass_cmd_topic: "mpc/hole_pass_cmd"
+    hole_pass_state_topic: "serial/hole_pass_state"
+    hole_pass_state_timeout_sec: 0.25
 
 navigation_mode_manager:
   ros__parameters:

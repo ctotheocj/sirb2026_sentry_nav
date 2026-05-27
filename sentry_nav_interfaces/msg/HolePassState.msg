@@ -1,0 +1,6 @@
+uint8 STATE_LOWERED=0
+uint8 STATE_LOWERING=1
+uint8 STATE_RAISING=2
+uint8 STATE_STAND=3
+
+uint8 state

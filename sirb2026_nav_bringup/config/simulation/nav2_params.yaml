@@ -155,6 +155,10 @@ fake_vel_transform:
     init_spin_speed: 3.14
     use_nav_yaw: false
     nav_yaw_topic: /Nav_yaw
+    hole_pass_lower_protection_enabled: true
+    hole_pass_cmd_topic: mpc/hole_pass_cmd
+    hole_pass_state_topic: serial/hole_pass_state
+    hole_pass_state_timeout_sec: 0.25
 
 navigation_mode_manager:
   ros__parameters:
@@ -290,8 +294,8 @@ bt_navigator:
       hole_ids: ["hole_1", "hole_2"]
       holes:
         hole_1:
-          port_a_polygon: [2.08, 3.07, 1.97, -2.02, 1.0, -1.94, 0.829, 3.13]
-          port_b_polygon: [5.0, 2.84, 4.81, -2.11, 3.85, -1.9, 3.74, 3.22]
+          port_a_polygon: [9.45, 6.39, 9.67, 2.07, 7.41, 1.51, 7.32, 6.09]
+          port_b_polygon: [14.4, 5.57, 13.9, 2.46, 12.1, 2.49, 12.1, 5.96]
         hole_2:
           port_a_polygon: [999.0, 1001.0, 999.5, 1001.0, 999.5, 1001.5, 999.0, 1001.5]
           port_b_polygon: [1000.0, 1001.0, 1000.5, 1001.0, 1000.5, 1001.5, 1000.0, 1001.5]
@@ -337,7 +341,7 @@ controller_server:
       yaw_goal_tolerance: 6.28
     FollowPath:
       plugin: f_mpc_controller::MpcController
-      debug_logging: true
+      debug_logging: false
       QX: 70.0
       QY: 70.0
       R: 0.06
@@ -427,7 +431,7 @@ local_costmap:
       width: 5
       height: 5
       resolution: 0.05
-      robot_radius: 0.2
+      robot_radius: 0.16
       plugins:
       - static_layer
       - occupancy_grid_layer
@@ -450,7 +454,7 @@ local_costmap:
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
         cost_scaling_factor: 8.0
-        inflation_radius: 0.22
+        inflation_radius: 0.18
       always_send_full_costmap: true
 
 global_costmap:
@@ -488,7 +492,7 @@ global_costmap:
         debug_logging: false
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
-        inflation_radius: 0.55
+        inflation_radius: 0.35
         cost_scaling_factor: 3.0
       always_send_full_costmap: true
 
