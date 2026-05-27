@@ -418,7 +418,7 @@ local_costmap:
   local_costmap:
     ros__parameters:
       use_sim_time: False
-      update_frequency: 5.0
+      update_frequency: 10.0
       publish_frequency: 10.0
       global_frame: odom
       robot_base_frame: gimbal_yaw_fake
@@ -426,7 +426,7 @@ local_costmap:
       width: 5
       height: 5
       resolution: 0.05
-      robot_radius: 0.2
+      robot_radius: 0.18
       track_unknown_space: false
       plugins: ["static_layer", "occupancy_grid_layer", "inflation_layer"]
       static_layer:
@@ -437,7 +437,7 @@ local_costmap:
         enabled: true
         topic: <robot_namespace>/occupancy_grid
         occupied_threshold: 75
-        source_timeout: 0.6
+        source_timeout: 0.38
         stamp_source_cell_area: true
         clear_hole_corridors: true
         clear_hole_frame: map
@@ -454,11 +454,11 @@ global_costmap:
   global_costmap:
     ros__parameters:
       use_sim_time: False
-      update_frequency: 10.0
-      publish_frequency: 10.0
+      update_frequency: 5.0
+      publish_frequency: 5.0
       global_frame: map
       robot_base_frame: gimbal_yaw_fake
-      robot_radius: 0.2
+      robot_radius: 0.18
       resolution: 0.05
       track_unknown_space: false
       transform_tolerance: 0.2
@@ -500,7 +500,7 @@ map_saver:
 planner_server:
   ros__parameters:
     use_sim_time: False
-    expected_planner_frequency: 10.0
+    expected_planner_frequency: 3.0
     planner_plugins: ["GridBased"]
     GridBased:
       plugin: "nav2_theta_star_planner/ThetaStarPlanner"
