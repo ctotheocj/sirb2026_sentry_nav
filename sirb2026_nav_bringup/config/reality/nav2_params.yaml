@@ -784,7 +784,7 @@ grid_map_node:
       max_ray_length: 10.0
       pub_z_slice: 0.3
       occupancy_grid_project_all_z: true
-      occupancy_grid_min_z: 0.08
+      occupancy_grid_min_z: 0.15
       occupancy_grid_max_z: 1.10
       occupancy_grid_hold_enabled: true
       occupancy_grid_hold_time: 0.35
