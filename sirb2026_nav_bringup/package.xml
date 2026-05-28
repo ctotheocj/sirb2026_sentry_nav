@@ -34,6 +34,7 @@
   <exec_depend>dynamic_obstacle_tracker</exec_depend>
   <exec_depend>plan_env</exec_depend>
   <exec_depend>f_mpc_controller</exec_depend>
+  <exec_depend>pb_omni_pid_pursuit_controller</exec_depend>
   <exec_depend>sirb_smoother</exec_depend>
 
   <exec_depend>small_gicp_relocalization</exec_depend>

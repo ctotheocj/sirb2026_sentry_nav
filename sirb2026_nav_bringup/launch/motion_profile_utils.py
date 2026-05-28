@@ -39,6 +39,145 @@ def _as_bool(value):
     return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _normalize_controller_type(value):
+    controller_type = str(value or "mpc").strip().lower()
+    aliases = {
+        "f_mpc": "mpc",
+        "f_mpc_controller": "mpc",
+        "mpc_controller": "mpc",
+        "current": "mpc",
+        "pb_pid": "pid",
+        "omni_pid": "pid",
+        "pb_omni_pid": "pid",
+        "pb_omni_pid_pursuit": "pid",
+        "pb_omni_pid_pursuit_controller": "pid",
+    }
+    controller_type = aliases.get(controller_type, controller_type)
+    if controller_type not in ("mpc", "pid"):
+        raise ValueError(
+            f"unsupported controller_type '{value}', expected one of: mpc, pid")
+    return controller_type
+
+
+def _resolve_controller_type(context, controller_type_config=None):
+    if controller_type_config is not None:
+        return _normalize_controller_type(context.perform_substitution(controller_type_config))
+    if "controller_type" in context.launch_configurations:
+        return _normalize_controller_type(context.launch_configurations["controller_type"])
+    return None
+
+
+def _is_mpc_follow_path(follow):
+    return str(follow.get("plugin", "")).strip() == "f_mpc_controller::MpcController"
+
+
+def _is_pid_follow_path(follow):
+    return str(follow.get("plugin", "")).strip() == (
+        "pb_omni_pid_pursuit_controller::OmniPidPursuitController")
+
+
+def _default_pid_follow_path_params():
+    return {
+        "plugin": "pb_omni_pid_pursuit_controller::OmniPidPursuitController",
+        "translation_kp": 3.0,
+        "translation_ki": 0.1,
+        "translation_kd": 0.3,
+        "enable_rotation": False,
+        "rotation_kp": 3.0,
+        "rotation_ki": 0.1,
+        "rotation_kd": 0.3,
+        "transform_tolerance": 0.1,
+        "min_max_sum_error": 1.0,
+        "lookahead_dist": 2.0,
+        "use_velocity_scaled_lookahead_dist": True,
+        "lookahead_time": 1.0,
+        "min_lookahead_dist": 0.5,
+        "max_lookahead_dist": 1.0,
+        "use_interpolation": False,
+        "use_rotate_to_heading": False,
+        "use_rotate_to_heading_treshold": 0.1,
+        "min_approach_linear_velocity": 0.5,
+        "approach_velocity_scaling_dist": 1.0,
+        "v_linear_min": -2.5,
+        "v_linear_max": 2.5,
+        "v_angular_min": -3.0,
+        "v_angular_max": 3.0,
+        "curvature_min": 0.4,
+        "curvature_max": 0.7,
+        "reduction_ratio_at_high_curvature": 0.5,
+        "curvature_forward_dist": 0.7,
+        "curvature_backward_dist": 0.3,
+        "max_velocity_scaling_factor_rate": 0.9,
+    }
+
+
+def _profile_follow_path_params(data, controller_type):
+    profiles = data.get("controller_profiles", {})
+    if not isinstance(profiles, dict):
+        return None
+    params = profiles.get("ros__parameters", {})
+    if not isinstance(params, dict):
+        return None
+    profile = params.get(controller_type, {})
+    if not isinstance(profile, dict):
+        return None
+    follow = profile.get("FollowPath", {})
+    if isinstance(follow, dict):
+        return dict(follow)
+    return None
+
+
+def _minimal_mpc_follow_path_params(existing):
+    params = dict(existing) if isinstance(existing, dict) else {}
+    params.update({
+        "plugin": "f_mpc_controller::MpcController",
+        "use_odometry_state": True,
+        "odom_topic": params.get("odom_topic", "odometry"),
+        "state_frame": params.get("state_frame", "gimbal_yaw"),
+        "command_frame": params.get("command_frame", "gimbal_yaw_fake"),
+        "navigation_mode_topic": params.get(
+            "navigation_mode_topic", "navigation_mode_manager/mode"),
+        "minco_traj_topic": params.get(
+            "minco_traj_topic", "trajectory_manager/trajectory_for_mpc"),
+    })
+    return params
+
+
+def apply_controller_profile(data, controller_type):
+    if controller_type is None:
+        return None
+
+    controller_type = _normalize_controller_type(controller_type)
+    controller = _node_params(data, "controller_server")
+    controller["controller_plugins"] = ["FollowPath"]
+    current_follow = controller.get("FollowPath", {})
+    if not isinstance(current_follow, dict):
+        current_follow = {}
+
+    if controller_type == "pid":
+        profile_follow = _profile_follow_path_params(data, "pid")
+        if profile_follow is not None:
+            follow = profile_follow
+        elif _is_pid_follow_path(current_follow):
+            follow = dict(current_follow)
+        else:
+            follow = _default_pid_follow_path_params()
+        follow["plugin"] = "pb_omni_pid_pursuit_controller::OmniPidPursuitController"
+        controller["FollowPath"] = follow
+    else:
+        profile_follow = _profile_follow_path_params(data, "mpc")
+        if profile_follow is not None:
+            follow = profile_follow
+        elif _is_mpc_follow_path(current_follow):
+            follow = dict(current_follow)
+        else:
+            follow = _minimal_mpc_follow_path_params(current_follow)
+        follow["plugin"] = "f_mpc_controller::MpcController"
+        controller["FollowPath"] = follow
+
+    return controller_type
+
+
 def _read_pgm_size(image_path):
     with open(image_path, "rb") as f:
         magic = f.readline().strip()
@@ -99,15 +238,21 @@ def apply_motion_profile_to_dict(data):
     velocity = _node_params(data, "velocity_smoother")
     fake_vel = _node_params(data, "fake_vel_transform")
 
-    follow["v_ref_max"] = control_speed
-    follow["ax_max"] = control_accel
-    follow["ay_max"] = control_accel
-    follow["lateral_accel_limit"] = control_accel
-    follow["v_circle_max"] = control_speed
-    follow["pose_jump_speed_threshold"] = localization_jump
-    follow["enable_lateral_error_ref_scaling"] = True
-    follow["lateral_error_slow_threshold"] = tracking_soft
-    follow["lateral_error_high_threshold"] = tracking_hard
+    if _is_mpc_follow_path(follow):
+        follow["v_ref_max"] = control_speed
+        follow["ax_max"] = control_accel
+        follow["ay_max"] = control_accel
+        follow["lateral_accel_limit"] = control_accel
+        follow["v_circle_max"] = control_speed
+        follow["pose_jump_speed_threshold"] = localization_jump
+        follow["enable_lateral_error_ref_scaling"] = True
+        follow["lateral_error_slow_threshold"] = tracking_soft
+        follow["lateral_error_high_threshold"] = tracking_hard
+    elif _is_pid_follow_path(follow):
+        follow["v_linear_max"] = control_speed
+        follow["v_linear_min"] = -control_speed
+        follow["min_approach_linear_velocity"] = min(
+            float(follow.get("min_approach_linear_velocity", 0.5)), control_speed)
 
     smoother["minco_v_ref"] = max_speed
     smoother["minco_v_max"] = control_speed
@@ -152,8 +297,9 @@ def apply_dynamic_obstacle_mode(data, enabled):
 
     bt_nav["use_dynamic_obstacles"] = enabled
 
-    follow["enable_dynamic_obstacle_avoidance"] = enabled
-    follow.setdefault("dynamic_obstacle_topic", "dynamic_obstacles")
+    if _is_mpc_follow_path(follow):
+        follow["enable_dynamic_obstacle_avoidance"] = enabled
+        follow.setdefault("dynamic_obstacle_topic", "dynamic_obstacles")
 
     smoother["dynamic_obstacle_enabled"] = enabled
     smoother.setdefault("dynamic_obstacle_topic", "dynamic_obstacles")
@@ -217,7 +363,8 @@ def _replace_robot_namespace_placeholders(text, namespace):
     return text.replace("<robot_namespace>", replacement)
 
 
-def prepare_navigation_params(context, params_file_config, namespace_config=None):
+def prepare_navigation_params(
+    context, params_file_config, namespace_config=None, controller_type_config=None):
     if context.launch_configurations.get("_sirb2026_navigation_params_prepared") == "true":
         return []
 
@@ -231,6 +378,8 @@ def prepare_navigation_params(context, params_file_config, namespace_config=None
         text = f.read()
     text = _replace_robot_namespace_placeholders(text, namespace)
     data = yaml.safe_load(text)
+    selected_controller = apply_controller_profile(data, _resolve_controller_type(
+        context, controller_type_config))
     synced_clear_corridors = sync_hole_clear_corridors(data)
 
     safe_ns = "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in namespace)
@@ -243,6 +392,8 @@ def prepare_navigation_params(context, params_file_config, namespace_config=None
     context.launch_configurations["params_file"] = output
     context.launch_configurations["_sirb2026_navigation_params_prepared"] = "true"
     print(f"[navigation_params] generated params: {output}")
+    if selected_controller:
+        print(f"[navigation_params] controller_type={selected_controller}")
     print(f"[navigation_params] hole_clear_corridors synced_layers={synced_clear_corridors}")
     return []
 
@@ -260,10 +411,12 @@ def apply_launch_mode_guards(data, use_composition):
 def prepare_motion_profile_params(
     context, params_file_config, label, map_file_config=None,
     use_dynamic_obstacles_config=None, use_yaw_fusion_config=None,
-    use_dodge_manager_config=None):
+    use_dodge_manager_config=None, controller_type_config=None):
     source = context.perform_substitution(params_file_config)
     with open(source, "r") as f:
         data = yaml.safe_load(f)
+    selected_controller = apply_controller_profile(data, _resolve_controller_type(
+        context, controller_type_config))
     apply_motion_profile_to_dict(data)
     if use_dynamic_obstacles_config is not None:
         use_dynamic_obstacles = _as_bool(
@@ -308,6 +461,8 @@ def prepare_motion_profile_params(
     if bounds:
         origin, size = bounds
         print(f"[motion_profile] grid_map bounds origin={origin} size={size}")
+    if selected_controller:
+        print(f"[motion_profile] controller_type={selected_controller}")
     if esdf_disabled:
         print("[motion_profile] use_composition=false; disabled smoother minco_use_esdf because GridMapRegistry is process-local")
     print(f"[motion_profile] dynamic_obstacles enabled={use_dynamic_obstacles}")

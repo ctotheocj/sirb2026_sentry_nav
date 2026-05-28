@@ -115,6 +115,41 @@ motion_profile:
     tracking_error_hard: 0.45 # 跟踪误差超过该值后进入强降速跟踪
     localization_jump_speed: 7.0 # 定位瞬时跳变速度阈值，高于该值认为 TF/定位异常
 
+controller_profiles:
+  ros__parameters:
+    pid:
+      FollowPath:
+        plugin: "pb_omni_pid_pursuit_controller::OmniPidPursuitController"
+        translation_kp: 3.0
+        translation_ki: 0.1
+        translation_kd: 0.3
+        enable_rotation: false
+        rotation_kp: 3.0
+        rotation_ki: 0.1
+        rotation_kd: 0.3
+        transform_tolerance: 0.1
+        min_max_sum_error: 1.0
+        lookahead_dist: 2.0
+        use_velocity_scaled_lookahead_dist: true
+        lookahead_time: 1.0
+        min_lookahead_dist: 0.5
+        max_lookahead_dist: 1.0
+        use_interpolation: false
+        use_rotate_to_heading: false
+        use_rotate_to_heading_treshold: 0.1
+        min_approach_linear_velocity: 0.5
+        approach_velocity_scaling_dist: 1.0
+        v_linear_min: -2.5
+        v_linear_max: 2.5
+        v_angular_min: -3.0
+        v_angular_max: 3.0
+        curvature_min: 0.4
+        curvature_max: 0.7
+        reduction_ratio_at_high_curvature: 0.5
+        curvature_forward_dist: 0.7
+        curvature_backward_dist: 0.3
+        max_velocity_scaling_factor_rate: 0.9
+
 sensor_scan_generation:
   ros__parameters:
     use_sim_time: False

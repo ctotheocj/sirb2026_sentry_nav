@@ -57,6 +57,7 @@ def generate_launch_description():
     use_yaw_fusion        = LaunchConfiguration("use_yaw_fusion")
     use_dynamic_obstacles = LaunchConfiguration("use_dynamic_obstacles")
     use_dodge_manager     = LaunchConfiguration("use_dodge_manager")
+    controller_type       = LaunchConfiguration("controller_type")
 
     declare_namespace_cmd = DeclareLaunchArgument(
         "namespace",
@@ -177,11 +178,21 @@ def generate_launch_description():
             "Launch dodge_manager and enable its direct cmd_vel takeover when True."
         ),
     )
+    declare_controller_type_cmd = DeclareLaunchArgument(
+        "controller_type",
+        default_value="mpc",
+        choices=["mpc", "pid"],
+        description=(
+            "Select Nav2 FollowPath controller plugin. "
+            "mpc uses f_mpc_controller; pid uses pb_omni_pid_pursuit_controller."
+        ),
+    )
 
     prepare_motion_profile_cmd = OpaqueFunction(
         function=lambda context, *_: prepare_motion_profile_params(
             context, params_file, "reality", map_yaml_file,
-            use_dynamic_obstacles, use_yaw_fusion, use_dodge_manager))
+            use_dynamic_obstacles, use_yaw_fusion, use_dodge_manager,
+            controller_type))
 
     configured_params = ParameterFile(
         RewrittenYaml(
@@ -225,6 +236,7 @@ def generate_launch_description():
             "autostart":             autostart,
             "use_composition":       use_composition,
             "use_respawn":           use_respawn,
+            "controller_type":       controller_type,
         }.items(),
     )
 
@@ -315,6 +327,7 @@ def generate_launch_description():
     ld.add_action(declare_use_yaw_fusion_cmd)
     ld.add_action(declare_use_dynamic_obstacles_cmd)
     ld.add_action(declare_use_dodge_manager_cmd)
+    ld.add_action(declare_controller_type_cmd)
     ld.add_action(prepare_motion_profile_cmd)
 
     ld.add_action(start_robot_state_publisher_cmd)

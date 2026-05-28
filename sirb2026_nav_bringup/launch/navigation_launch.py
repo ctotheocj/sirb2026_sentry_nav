@@ -42,6 +42,7 @@ def generate_launch_description():
     use_respawn = LaunchConfiguration("use_respawn")
     log_level = LaunchConfiguration("log_level")
     slam = LaunchConfiguration("slam")
+    controller_type = LaunchConfiguration("controller_type")
 
     lifecycle_nodes = [
         "controller_server",
@@ -56,7 +57,8 @@ def generate_launch_description():
     param_substitutions = {"use_sim_time": use_sim_time, "autostart": autostart}
 
     prepare_navigation_params_cmd = OpaqueFunction(
-        function=lambda context, *_: prepare_navigation_params(context, params_file, namespace))
+        function=lambda context, *_: prepare_navigation_params(
+            context, params_file, namespace, controller_type))
 
     configured_params = ParameterFile(
         RewrittenYaml(
@@ -124,6 +126,16 @@ def generate_launch_description():
         "slam",
         default_value="False",
         description="Whether slam_launch is active. If true, slam_launch owns obstacle_scan.",
+    )
+
+    declare_controller_type_cmd = DeclareLaunchArgument(
+        "controller_type",
+        default_value="mpc",
+        choices=["mpc", "pid"],
+        description=(
+            "Select Nav2 FollowPath controller plugin. "
+            "mpc uses f_mpc_controller; pid uses pb_omni_pid_pursuit_controller."
+        ),
     )
 
     load_nodes = GroupAction(
@@ -422,6 +434,7 @@ def generate_launch_description():
     ld.add_action(declare_use_respawn_cmd)
     ld.add_action(declare_log_level_cmd)
     ld.add_action(declare_slam_cmd)
+    ld.add_action(declare_controller_type_cmd)
     ld.add_action(prepare_navigation_params_cmd)
     ld.add_action(load_nodes)
     ld.add_action(load_composable_nodes)
