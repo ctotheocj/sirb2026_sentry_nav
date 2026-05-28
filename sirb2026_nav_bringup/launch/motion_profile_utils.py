@@ -108,6 +108,19 @@ def _default_pid_follow_path_params():
         "curvature_forward_dist": 0.7,
         "curvature_backward_dist": 0.3,
         "max_velocity_scaling_factor_rate": 0.9,
+        "use_minco_tracking_path": True,
+        "minco_traj_topic": "trajectory_manager/trajectory_for_mpc",
+        "minco_tracking_timeout": 0.5,
+        "minco_tracking_sample_dt": 0.08,
+        "minco_tracking_min_duration": 1.0,
+        "minco_tracking_max_duration": 4.0,
+        "minco_projection_search_ahead_sec": 0.30,
+        "minco_projection_max_advance_sec": 0.12,
+        "minco_projection_max_lag_sec": 0.80,
+        "skip_collision_check_in_hole_pass": True,
+        "navigation_mode_topic": "navigation_mode_manager/mode",
+        "hole_pass_mode_name": "hole_pass",
+        "navigation_mode_timeout": 0.5,
     }
 
 

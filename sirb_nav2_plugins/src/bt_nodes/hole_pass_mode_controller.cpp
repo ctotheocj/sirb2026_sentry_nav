@@ -40,12 +40,15 @@ BT::NodeStatus HolePassModeController::tick()
 {
   callback_group_executor_.spin_some();
   syncActiveModeFromManager();
+  publishEffectiveTargets();
 
   double robot_x = 0.0;
   double robot_y = 0.0;
   double robot_yaw = 0.0;
   if (!getRobotPose(robot_x, robot_y, robot_yaw)) {
-    if (state_ == ModeState::LOWERING || state_ == ModeState::RAISING) {
+    if (state_ == ModeState::LOWERING || state_ == ModeState::RAISING ||
+      state_ == ModeState::ROLLING_BACK || state_ == ModeState::RAISING_AT_ENTRY)
+    {
       refreshHoleMode(robot_yaw, false);
       return BT::NodeStatus::RUNNING;
     }
@@ -57,6 +60,32 @@ BT::NodeStatus HolePassModeController::tick()
       validPolygon(active_entry_polygon_) && validPolygon(active_exit_polygon_);
     if (have_active_geometry && exitReached(robot_x, robot_y)) {
       if (!startRaise(robot_yaw)) {
+        return BT::NodeStatus::FAILURE;
+      }
+      publishEffectiveTargets();
+      return BT::NodeStatus::SUCCESS;
+    }
+
+    double target_x = 0.0;
+    double target_y = 0.0;
+    const bool have_target = getNavigationTarget(target_x, target_y);
+    if (have_active_geometry && !navigationStillMatchesActivePass(have_target, target_x, target_y)) {
+      state_ = ModeState::ROLLING_BACK;
+      setRollbackTargets();
+      refreshHoleMode(robot_yaw, have_active_geometry);
+      publishEffectiveTargets();
+      return BT::NodeStatus::SUCCESS;
+    }
+    refreshHoleMode(robot_yaw, have_active_geometry);
+    return BT::NodeStatus::SUCCESS;
+  }
+
+  if (state_ == ModeState::ROLLING_BACK) {
+    const bool have_active_geometry =
+      validPolygon(active_entry_polygon_) && validPolygon(active_exit_polygon_);
+    setRollbackTargets();
+    if (have_active_geometry && activeEntryReached(robot_x, robot_y)) {
+      if (!startRaiseAtEntry(robot_yaw)) {
         return BT::NodeStatus::FAILURE;
       }
     } else {
@@ -78,6 +107,27 @@ BT::NodeStatus HolePassModeController::tick()
     return BT::NodeStatus::SUCCESS;
   }
 
+  if (state_ == ModeState::RAISING_AT_ENTRY) {
+    const bool have_active_geometry =
+      validPolygon(active_entry_polygon_) && validPolygon(active_exit_polygon_);
+    if (have_active_geometry && !activeEntryReached(robot_x, robot_y)) {
+      state_ = ModeState::ROLLING_BACK;
+      raise_start_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+      setRollbackTargets();
+      refreshHoleMode(robot_yaw, have_active_geometry);
+      publishEffectiveTargets();
+      return BT::NodeStatus::SUCCESS;
+    }
+    refreshHoleMode(robot_yaw, have_active_geometry);
+    const double raise_duration_sec = parameterOrInput("raise_duration_sec", 1.0);
+    if (raise_start_time_.nanoseconds() != 0 &&
+      (node_->now() - raise_start_time_).seconds() >= std::max(0.0, raise_duration_sec))
+    {
+      exitHoleMode("rollback raise complete");
+    }
+    return BT::NodeStatus::SUCCESS;
+  }
+
   if (state_ == ModeState::WAIT_CLEAR) {
     if (lockedHoleCleared(robot_x, robot_y)) {
       state_ = ModeState::IDLE;
@@ -95,11 +145,34 @@ BT::NodeStatus HolePassModeController::tick()
       return BT::NodeStatus::FAILURE;
     }
   }
+  publishEffectiveTargets();
   return BT::NodeStatus::SUCCESS;
 }
 
 void HolePassModeController::halt()
 {
+  if (state_ == ModeState::LOWERING || state_ == ModeState::ROLLING_BACK) {
+    double robot_yaw = 0.0;
+    double robot_x = 0.0;
+    double robot_y = 0.0;
+    getRobotPose(robot_x, robot_y, robot_yaw);
+    state_ = ModeState::ROLLING_BACK;
+    setRollbackTargets();
+    refreshHoleMode(robot_yaw, validPolygon(active_entry_polygon_));
+    publishEffectiveTargets();
+    resetStatus();
+    return;
+  }
+  if (state_ == ModeState::RAISING || state_ == ModeState::RAISING_AT_ENTRY) {
+    double robot_yaw = 0.0;
+    double robot_x = 0.0;
+    double robot_y = 0.0;
+    getRobotPose(robot_x, robot_y, robot_yaw);
+    refreshHoleMode(robot_yaw, validPolygon(active_entry_polygon_));
+    publishEffectiveTargets();
+    resetStatus();
+    return;
+  }
   resetStatus();
 }
 
@@ -248,7 +321,9 @@ bool HolePassModeController::syncActiveModeFromManager()
     return false;
   }
   if (!status.active || status.mode != "hole_pass" || status.hole_id.empty()) {
-    if (state_ == ModeState::LOWERING || state_ == ModeState::RAISING) {
+    if (state_ == ModeState::LOWERING || state_ == ModeState::RAISING ||
+      state_ == ModeState::ROLLING_BACK || state_ == ModeState::RAISING_AT_ENTRY)
+    {
       state_ = ModeState::IDLE;
       active_hole_id_.clear();
       active_entry_port_.clear();
@@ -257,6 +332,8 @@ bool HolePassModeController::syncActiveModeFromManager()
       active_exit_polygon_.clear();
       active_target_yaw_ = 0.0;
       active_v_yaw_ = 0.0;
+      have_original_goal_ = false;
+      have_original_goals_ = false;
       raise_start_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     }
     return true;
@@ -266,8 +343,10 @@ bool HolePassModeController::syncActiveModeFromManager()
   const std::string previous_hole_id = active_hole_id_;
   active_hole_id_ = status.hole_id;
   active_v_yaw_ = status.v_yaw;
-  state_ = status.hole_cmd == sentry_nav_interfaces::msg::HolePassCmd::HOLE_RAISE ?
-    ModeState::RAISING : ModeState::LOWERING;
+  if (state_ != ModeState::ROLLING_BACK && state_ != ModeState::RAISING_AT_ENTRY) {
+    state_ = status.hole_cmd == sentry_nav_interfaces::msg::HolePassCmd::HOLE_RAISE ?
+      ModeState::RAISING : ModeState::LOWERING;
+  }
   Trigger trigger;
   if (previous_hole_id == status.hole_id &&
     validPolygon(active_entry_polygon_) && validPolygon(active_exit_polygon_) &&
@@ -313,9 +392,11 @@ bool HolePassModeController::syncActiveModeFromManager()
   if (!same_owner || was_idle) {
     last_refresh_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
   }
-  if (state_ == ModeState::RAISING && raise_start_time_.nanoseconds() == 0) {
+  if ((state_ == ModeState::RAISING || state_ == ModeState::RAISING_AT_ENTRY) &&
+    raise_start_time_.nanoseconds() == 0)
+  {
     raise_start_time_ = node_->now();
-  } else if (state_ == ModeState::LOWERING) {
+  } else if (state_ == ModeState::LOWERING || state_ == ModeState::ROLLING_BACK) {
     raise_start_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
   }
   if (same_owner) {
@@ -405,6 +486,8 @@ bool HolePassModeController::enterHoleMode(const Trigger & trigger, double robot
 {
   active_target_yaw_ = targetYawFromParameter();
   active_v_yaw_ = activeVYaw(robot_yaw);
+  have_original_goal_ = getInput("goal", original_goal_) && !original_goal_.header.frame_id.empty();
+  have_original_goals_ = getInput("goals", original_goals_) && !original_goals_.empty();
   if (!callSetNavigationMode(
       "hole_pass", trigger.hole_id, sentry_nav_interfaces::msg::HolePassCmd::HOLE_LOWER,
       active_v_yaw_))
@@ -419,6 +502,7 @@ bool HolePassModeController::enterHoleMode(const Trigger & trigger, double robot
   locked_hole_id_.clear();
   active_entry_polygon_ = trigger.entry_polygon;
   active_exit_polygon_ = trigger.exit_polygon;
+  setRollbackTargets();
   last_refresh_time_ = node_->now();
   raise_start_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
   RCLCPP_INFO(
@@ -430,6 +514,19 @@ bool HolePassModeController::enterHoleMode(const Trigger & trigger, double robot
 
 bool HolePassModeController::startRaise(double robot_yaw)
 {
+  double robot_x = 0.0;
+  double robot_y = 0.0;
+  double ignored_yaw = 0.0;
+  if (!getRobotPose(robot_x, robot_y, ignored_yaw) ||
+    !pointInPolygon(robot_x, robot_y, active_exit_polygon_))
+  {
+    RCLCPP_WARN_THROTTLE(
+      node_->get_logger(), *node_->get_clock(), 1000,
+      "HolePassModeController: refusing to raise outside exit polygon for hole='%s'",
+      active_hole_id_.c_str());
+    return false;
+  }
+
   active_v_yaw_ = activeVYaw(robot_yaw);
   if (!callSetNavigationMode(
       "hole_pass", active_hole_id_, sentry_nav_interfaces::msg::HolePassCmd::HOLE_RAISE,
@@ -447,10 +544,43 @@ bool HolePassModeController::startRaise(double robot_yaw)
   return true;
 }
 
+bool HolePassModeController::startRaiseAtEntry(double robot_yaw)
+{
+  double robot_x = 0.0;
+  double robot_y = 0.0;
+  double ignored_yaw = 0.0;
+  if (!getRobotPose(robot_x, robot_y, ignored_yaw) ||
+    !pointInPolygon(robot_x, robot_y, active_entry_polygon_))
+  {
+    RCLCPP_WARN_THROTTLE(
+      node_->get_logger(), *node_->get_clock(), 1000,
+      "HolePassModeController: refusing rollback raise outside entry polygon for hole='%s'",
+      active_hole_id_.c_str());
+    return false;
+  }
+
+  active_v_yaw_ = activeVYaw(robot_yaw);
+  if (!callSetNavigationMode(
+      "hole_pass", active_hole_id_, sentry_nav_interfaces::msg::HolePassCmd::HOLE_RAISE,
+      active_v_yaw_))
+  {
+    return false;
+  }
+
+  state_ = ModeState::RAISING_AT_ENTRY;
+  raise_start_time_ = node_->now();
+  last_refresh_time_ = raise_start_time_;
+  RCLCPP_INFO(
+    node_->get_logger(), "HolePassModeController: rollback entry reached, raising hole='%s'",
+    active_hole_id_.c_str());
+  return true;
+}
+
 void HolePassModeController::refreshHoleMode(double robot_yaw, bool update_yaw_command)
 {
   double refresh_period_sec = 0.05;
-  const uint8_t hole_cmd = state_ == ModeState::RAISING ?
+  const uint8_t hole_cmd =
+    (state_ == ModeState::RAISING || state_ == ModeState::RAISING_AT_ENTRY) ?
     sentry_nav_interfaces::msg::HolePassCmd::HOLE_RAISE :
     sentry_nav_interfaces::msg::HolePassCmd::HOLE_LOWER;
   getInput("refresh_period_sec", refresh_period_sec);
@@ -492,6 +622,8 @@ void HolePassModeController::exitHoleMode(const char * reason)
   active_exit_port_.clear();
   active_target_yaw_ = 0.0;
   active_v_yaw_ = 0.0;
+  have_original_goal_ = false;
+  have_original_goals_ = false;
   active_entry_polygon_.clear();
   active_exit_polygon_.clear();
   raise_start_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
@@ -511,31 +643,72 @@ bool HolePassModeController::lockedHoleCleared(double robot_x, double robot_y) c
   return true;
 }
 
-bool HolePassModeController::exitReached(double robot_x, double robot_y)
+void HolePassModeController::publishEffectiveTargets()
 {
-  if (pointInPolygon(robot_x, robot_y, active_exit_polygon_)) {
-    return true;
+  if (state_ == ModeState::ROLLING_BACK || state_ == ModeState::RAISING_AT_ENTRY) {
+    setRollbackTargets();
+    setOutput("effective_goal", rollback_goal_);
+    std::vector<geometry_msgs::msg::PoseStamped> rollback_goals;
+    rollback_goals.reserve(2);
+    rollback_goals.push_back(rollback_goal_);
+    rollback_goals.push_back(rollback_goal_);
+    setOutput("effective_goals", rollback_goals);
+    return;
   }
+
+  geometry_msgs::msg::PoseStamped goal;
+  if (getInput("goal", goal) && !goal.header.frame_id.empty()) {
+    setOutput("effective_goal", goal);
+  } else if (have_original_goal_) {
+    setOutput("effective_goal", original_goal_);
+  }
+
+  std::vector<geometry_msgs::msg::PoseStamped> goals;
+  if (getInput("goals", goals) && !goals.empty()) {
+    setOutput("effective_goals", goals);
+  } else if (have_original_goals_) {
+    setOutput("effective_goals", original_goals_);
+  }
+}
+
+void HolePassModeController::setRollbackTargets()
+{
+  std::string global_frame = "map";
+  getInput("global_frame", global_frame);
+  rollback_goal_.header.frame_id = global_frame;
+  rollback_goal_.header.stamp = node_->now();
+  rollback_goal_.pose.position.x = polygonCenterX(active_entry_polygon_);
+  rollback_goal_.pose.position.y = polygonCenterY(active_entry_polygon_);
+  rollback_goal_.pose.position.z = 0.0;
+  rollback_goal_.pose.orientation.w = 1.0;
+  rollback_goal_.pose.orientation.x = 0.0;
+  rollback_goal_.pose.orientation.y = 0.0;
+  rollback_goal_.pose.orientation.z = 0.0;
+}
+
+bool HolePassModeController::navigationStillMatchesActivePass(
+  bool have_target,
+  double target_x,
+  double target_y)
+{
   if (!validPolygon(active_entry_polygon_) || !validPolygon(active_exit_polygon_)) {
     return false;
   }
-
-  const double entry_x = polygonCenterX(active_entry_polygon_);
-  const double entry_y = polygonCenterY(active_entry_polygon_);
-  const double exit_x = polygonCenterX(active_exit_polygon_);
-  const double exit_y = polygonCenterY(active_exit_polygon_);
-  const double path_x = exit_x - entry_x;
-  const double path_y = exit_y - entry_y;
-  const double path_norm = std::hypot(path_x, path_y);
-  if (path_norm < kEps) {
-    return false;
+  if (!boolParameterOrInput("require_navigation_intent", true)) {
+    return true;
   }
+  return have_target &&
+         triggerMatchesNavigationIntent(active_entry_polygon_, active_exit_polygon_, target_x, target_y);
+}
 
-  const double progress =
-    ((robot_x - entry_x) * path_x + (robot_y - entry_y) * path_y) / path_norm;
-  const double exit_progress = path_norm;
-  const double exit_pass_margin = std::max(0.0, parameterOrInput("exit_pass_margin", 0.2));
-  return progress > exit_progress + exit_pass_margin;
+bool HolePassModeController::activeEntryReached(double robot_x, double robot_y) const
+{
+  return pointInPolygon(robot_x, robot_y, active_entry_polygon_);
+}
+
+bool HolePassModeController::exitReached(double robot_x, double robot_y)
+{
+  return pointInPolygon(robot_x, robot_y, active_exit_polygon_);
 }
 
 bool HolePassModeController::triggerMatchesNavigationIntent(
@@ -576,7 +749,8 @@ double HolePassModeController::activeVYaw(double robot_yaw)
   const double yaw_kp = parameterOrInput("yaw_kp", 2.5);
   const double max_v_yaw = std::max(0.0, parameterOrInput("max_v_yaw", 1.8));
   const double yaw_error = normalizeAngle(active_target_yaw_ - robot_yaw);
-  return std::clamp(yaw_kp * yaw_error, -max_v_yaw, max_v_yaw);
+  const double yaw_error_deg = yaw_error * 180.0 / M_PI;
+  return std::clamp(yaw_kp * yaw_error_deg, -max_v_yaw, max_v_yaw);
 }
 
 double HolePassModeController::targetYawFromParameter()

@@ -16,12 +16,18 @@
 #define PB_OMNI_PID_PURSUIT_CONTROLLER__OMNI_PID_PURSUIT_CONTROLLER_HPP_
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
 #include "nav2_core/controller.hpp"
 #include "pb_omni_pid_pursuit_controller/pid.hpp"
+#include "sentry_nav_interfaces/msg/minco_trajectory.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "visualization_msgs/msg/marker_array.hpp"
+
+template<int D>
+class Trajectory;
 
 namespace pb_omni_pid_pursuit_controller
 {
@@ -197,6 +203,38 @@ protected:
   bool isCollisionDetected(const nav_msgs::msg::Path & path);
 
 private:
+  using MincoTrajectoryMsg = sentry_nav_interfaces::msg::MincoTrajectory;
+
+  void mincoTrajectoryCallback(const MincoTrajectoryMsg::SharedPtr msg);
+
+  void navigationModeCallback(const std_msgs::msg::String::SharedPtr msg);
+
+  bool shouldSkipCollisionCheck() const;
+
+  bool buildTrajectoryFromMsg(const MincoTrajectoryMsg & msg, Trajectory<5> & traj) const;
+
+  nav_msgs::msg::Path sampleMincoTrackingPath(
+    const MincoTrajectoryMsg & msg, const Trajectory<5> & traj, double start_time) const;
+
+  nav_msgs::msg::Path getControllerPlan(
+    const geometry_msgs::msg::PoseStamped & robot_pose,
+    bool & using_minco,
+    bool & minco_terminal_stop);
+
+  bool transformPoseLatest(
+    const std::string & frame,
+    const geometry_msgs::msg::PoseStamped & in_pose,
+    geometry_msgs::msg::PoseStamped & out_pose) const;
+
+  bool projectRobotOntoMincoPath(
+    const MincoTrajectoryMsg & msg,
+    const Trajectory<5> & traj,
+    const geometry_msgs::msg::PoseStamped & robot_pose,
+    double time_seed,
+    double & projected_time);
+
+  void updatePathOrientations(nav_msgs::msg::Path & path) const;
+
   /**
    * @brief Applies curvature based speed limitation
    * @param path Transformed local path
@@ -297,9 +335,40 @@ private:
   double curvature_forward_dist_;
   double curvature_backward_dist_;
   double max_velocity_scaling_factor_rate_;
+  bool use_minco_tracking_path_;
+  std::string minco_traj_topic_;
+  double minco_tracking_timeout_;
+  double minco_tracking_sample_dt_;
+  double minco_tracking_min_duration_;
+  double minco_tracking_max_duration_;
+  double minco_projection_search_ahead_sec_;
+  double minco_projection_max_advance_sec_;
+  double minco_projection_max_lag_sec_;
+  bool skip_collision_check_in_hole_pass_;
+  std::string navigation_mode_topic_;
+  std::string hole_pass_mode_name_;
+  double navigation_mode_timeout_;
   tf2::Duration transform_tolerance_;
 
   nav_msgs::msg::Path global_plan_;
+  nav_msgs::msg::Path bt_global_plan_;
+  nav_msgs::msg::Path active_controller_plan_;
+  rclcpp::Subscription<MincoTrajectoryMsg>::SharedPtr minco_traj_sub_;
+  mutable std::mutex minco_mutex_;
+  MincoTrajectoryMsg latest_minco_msg_;
+  std::shared_ptr<Trajectory<5>> latest_minco_traj_;
+  rclcpp::Time latest_minco_receive_time_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time latest_minco_first_receive_time_{0, 0, RCL_ROS_TIME};
+  double latest_minco_time_base_offset_sec_{0.0};
+  uint64_t latest_minco_trajectory_id_{0};
+  rclcpp::Time last_minco_projection_update_time_{0, 0, RCL_ROS_TIME};
+  uint64_t last_projected_minco_trajectory_id_{0};
+  double last_minco_projected_time_{0.0};
+  bool has_latest_minco_traj_{false};
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr navigation_mode_sub_;
+  mutable std::mutex navigation_mode_mutex_;
+  std::string latest_navigation_mode_{"normal"};
+  rclcpp::Time latest_navigation_mode_time_{0, 0, RCL_ROS_TIME};
   rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::Path>::SharedPtr local_path_pub_;
   rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::PointStamped>::SharedPtr carrot_pub_;
   rclcpp_lifecycle::LifecyclePublisher<visualization_msgs::msg::MarkerArray>::SharedPtr

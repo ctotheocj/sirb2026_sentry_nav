@@ -7,13 +7,14 @@
                                 robot_frame="gimbal_yaw_fake"
                                 param_prefix="hole_pass"
                                 goal="{goal}"
+                                effective_goal="{hole_effective_goal}"
                                 mode_service="navigation_mode_manager/set_navigation_mode"
                                 mode_status_service="navigation_mode_manager/get_navigation_mode"
                                 refresh_period_sec="0.05"/>
         <RateController hz="1.0">
           <Fallback name="RateLimitedReplanGate">
             <Inverter>
-            <ReplanCondition path="{tracking_path}" goal="{goal}"
+            <ReplanCondition path="{tracking_path}" goal="{hole_effective_goal}"
                              goal_update_distance="0.5"
                              deviation_threshold="0.8"
                              collision_cost_threshold="253"
@@ -28,7 +29,7 @@
             <RecoveryNode name="PlanRecovery" number_of_retries="3">
             <RetryUntilSuccessful num_attempts="2">
               <Sequence name="PlanAndSmooth">
-                <ComputePathToPose server_timeout="1000" goal="{goal}" path="{candidate_path}" planner_id="GridBased"/>
+                <ComputePathToPose server_timeout="1000" goal="{hole_effective_goal}" path="{candidate_path}" planner_id="GridBased"/>
                 <GenerateMincoCandidate server_timeout="1000" input_path="{candidate_path}"
                                         smoothed_path="{candidate_smooth_path}"
                                         candidate_minco="{candidate_minco}"
@@ -52,7 +53,7 @@
               <GoalUpdated/>
               <RoundRobin name="PlanRecoveryActions">
                 <Sequence name="SelectNearbyGoalAndPlan">
-                  <SelectNearbyGoal input_goal="{goal}"
+                  <SelectNearbyGoal input_goal="{hole_effective_goal}"
                                     output_goal="{recovery_goal}"
                                     radius="0.5"
                                     radius_step="0.1"
@@ -97,7 +98,7 @@
             <ClearEntireCostmap name="ClearGlobalCostmap-Recovery"
                                 service_name="global_costmap/clear_entirely_global_costmap"/>
             <Wait wait_duration="0.20"/>
-            <ComputePathToPose server_timeout="1000" goal="{goal}" path="{candidate_path}" planner_id="GridBased"/>
+            <ComputePathToPose server_timeout="1000" goal="{hole_effective_goal}" path="{candidate_path}" planner_id="GridBased"/>
             <GenerateMincoCandidate server_timeout="1000" input_path="{candidate_path}"
                                     smoothed_path="{candidate_smooth_path}"
                                     candidate_minco="{candidate_minco}"
@@ -122,7 +123,7 @@
             <ClearEntireCostmap name="ClearGlobalCostmap-Recovery-2"
                                 service_name="global_costmap/clear_entirely_global_costmap"/>
             <Wait wait_duration="0.25"/>
-            <ComputePathToPose server_timeout="1000" goal="{goal}" path="{candidate_path}" planner_id="GridBased"/>
+            <ComputePathToPose server_timeout="1000" goal="{hole_effective_goal}" path="{candidate_path}" planner_id="GridBased"/>
             <GenerateMincoCandidate server_timeout="1000" input_path="{candidate_path}"
                                     smoothed_path="{candidate_smooth_path}"
                                     candidate_minco="{candidate_minco}"

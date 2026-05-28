@@ -14,9 +14,16 @@
 
 #include "pb_omni_pid_pursuit_controller/omni_pid_pursuit_controller.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
+#include "gcopter/minco.hpp"
+#include "gcopter/trajectory.hpp"
 #include "nav2_core/exceptions.hpp"
 #include "nav2_util/geometry_utils.hpp"
 #include "nav2_util/node_utils.hpp"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
 using nav2_util::declare_parameter_if_not_declared;
 using nav2_util::geometry_utils::euclidean_distance;
@@ -112,6 +119,34 @@ void OmniPidPursuitController::configure(
     node, plugin_name_ + ".curvature_backward_dist", rclcpp::ParameterValue(0.3));
   declare_parameter_if_not_declared(
     node, plugin_name_ + ".max_velocity_scaling_factor_rate", rclcpp::ParameterValue(0.9));
+  declare_parameter_if_not_declared(
+    node, plugin_name_ + ".use_minco_tracking_path", rclcpp::ParameterValue(false));
+  declare_parameter_if_not_declared(
+    node, plugin_name_ + ".minco_traj_topic",
+    rclcpp::ParameterValue("trajectory_manager/trajectory_for_mpc"));
+  declare_parameter_if_not_declared(
+    node, plugin_name_ + ".minco_tracking_timeout", rclcpp::ParameterValue(0.5));
+  declare_parameter_if_not_declared(
+    node, plugin_name_ + ".minco_tracking_sample_dt", rclcpp::ParameterValue(0.08));
+  declare_parameter_if_not_declared(
+    node, plugin_name_ + ".minco_tracking_min_duration", rclcpp::ParameterValue(1.0));
+  declare_parameter_if_not_declared(
+    node, plugin_name_ + ".minco_tracking_max_duration", rclcpp::ParameterValue(4.0));
+  declare_parameter_if_not_declared(
+    node, plugin_name_ + ".minco_projection_search_ahead_sec", rclcpp::ParameterValue(0.30));
+  declare_parameter_if_not_declared(
+    node, plugin_name_ + ".minco_projection_max_advance_sec", rclcpp::ParameterValue(0.12));
+  declare_parameter_if_not_declared(
+    node, plugin_name_ + ".minco_projection_max_lag_sec", rclcpp::ParameterValue(0.80));
+  declare_parameter_if_not_declared(
+    node, plugin_name_ + ".skip_collision_check_in_hole_pass", rclcpp::ParameterValue(true));
+  declare_parameter_if_not_declared(
+    node, plugin_name_ + ".navigation_mode_topic",
+    rclcpp::ParameterValue("navigation_mode_manager/mode"));
+  declare_parameter_if_not_declared(
+    node, plugin_name_ + ".hole_pass_mode_name", rclcpp::ParameterValue("hole_pass"));
+  declare_parameter_if_not_declared(
+    node, plugin_name_ + ".navigation_mode_timeout", rclcpp::ParameterValue(0.5));
 
   node->get_parameter(plugin_name_ + ".translation_kp", translation_kp_);
   node->get_parameter(plugin_name_ + ".translation_ki", translation_ki_);
@@ -155,11 +190,38 @@ void OmniPidPursuitController::configure(
   node->get_parameter(plugin_name_ + ".curvature_backward_dist", curvature_backward_dist_);
   node->get_parameter(
     plugin_name_ + ".max_velocity_scaling_factor_rate", max_velocity_scaling_factor_rate_);
+  node->get_parameter(plugin_name_ + ".use_minco_tracking_path", use_minco_tracking_path_);
+  node->get_parameter(plugin_name_ + ".minco_traj_topic", minco_traj_topic_);
+  node->get_parameter(plugin_name_ + ".minco_tracking_timeout", minco_tracking_timeout_);
+  node->get_parameter(plugin_name_ + ".minco_tracking_sample_dt", minco_tracking_sample_dt_);
+  node->get_parameter(plugin_name_ + ".minco_tracking_min_duration", minco_tracking_min_duration_);
+  node->get_parameter(plugin_name_ + ".minco_tracking_max_duration", minco_tracking_max_duration_);
+  node->get_parameter(
+    plugin_name_ + ".minco_projection_search_ahead_sec", minco_projection_search_ahead_sec_);
+  node->get_parameter(
+    plugin_name_ + ".minco_projection_max_advance_sec", minco_projection_max_advance_sec_);
+  node->get_parameter(
+    plugin_name_ + ".minco_projection_max_lag_sec", minco_projection_max_lag_sec_);
+  node->get_parameter(
+    plugin_name_ + ".skip_collision_check_in_hole_pass", skip_collision_check_in_hole_pass_);
+  node->get_parameter(plugin_name_ + ".navigation_mode_topic", navigation_mode_topic_);
+  node->get_parameter(plugin_name_ + ".hole_pass_mode_name", hole_pass_mode_name_);
+  node->get_parameter(plugin_name_ + ".navigation_mode_timeout", navigation_mode_timeout_);
 
   node->get_parameter("controller_frequency", control_frequency);
 
   transform_tolerance_ = tf2::durationFromSec(transform_tolerance);
   control_duration_ = 1.0 / control_frequency;
+  last_velocity_scaling_factor_ = v_linear_max_;
+  minco_tracking_timeout_ = std::max(0.05, minco_tracking_timeout_);
+  minco_tracking_sample_dt_ = std::clamp(minco_tracking_sample_dt_, 0.02, 0.50);
+  minco_tracking_min_duration_ = std::max(0.05, minco_tracking_min_duration_);
+  minco_tracking_max_duration_ =
+    std::max(minco_tracking_min_duration_, minco_tracking_max_duration_);
+  minco_projection_search_ahead_sec_ = std::clamp(minco_projection_search_ahead_sec_, 0.02, 2.0);
+  minco_projection_max_advance_sec_ = std::clamp(minco_projection_max_advance_sec_, 0.0, 1.0);
+  minco_projection_max_lag_sec_ = std::clamp(minco_projection_max_lag_sec_, 0.0, 5.0);
+  navigation_mode_timeout_ = std::max(0.05, navigation_mode_timeout_);
 
   local_path_pub_ = node->create_publisher<nav_msgs::msg::Path>("local_plan", 1);
   carrot_pub_ = node->create_publisher<geometry_msgs::msg::PointStamped>("lookahead_point", 1);
@@ -167,6 +229,12 @@ void OmniPidPursuitController::configure(
     node_.lock()
       ->create_publisher<visualization_msgs::msg::MarkerArray>(  // 初始化 MarkerArray Publisher
         "curvature_points_marker_array", rclcpp::QoS(10));
+  minco_traj_sub_ = node->create_subscription<MincoTrajectoryMsg>(
+    minco_traj_topic_, rclcpp::QoS(1),
+    std::bind(&OmniPidPursuitController::mincoTrajectoryCallback, this, std::placeholders::_1));
+  navigation_mode_sub_ = node->create_subscription<std_msgs::msg::String>(
+    navigation_mode_topic_, rclcpp::QoS(10),
+    std::bind(&OmniPidPursuitController::navigationModeCallback, this, std::placeholders::_1));
 
   move_pid_ = std::make_shared<PID>(
     control_duration_, v_linear_max_, v_linear_min_, translation_kp_, translation_kd_,
@@ -185,6 +253,20 @@ void OmniPidPursuitController::cleanup()
   local_path_pub_.reset();
   carrot_pub_.reset();
   curvature_points_pub_.reset();
+  minco_traj_sub_.reset();
+  navigation_mode_sub_.reset();
+  {
+    std::lock_guard<std::mutex> lock(minco_mutex_);
+    has_latest_minco_traj_ = false;
+    latest_minco_trajectory_id_ = 0;
+    last_projected_minco_trajectory_id_ = 0;
+    last_minco_projected_time_ = 0.0;
+  }
+  {
+    std::lock_guard<std::mutex> lock(navigation_mode_mutex_);
+    latest_navigation_mode_ = "normal";
+    latest_navigation_mode_time_ = rclcpp::Time(0, 0, clock_->get_clock_type());
+  }
 }
 
 void OmniPidPursuitController::activate()
@@ -225,6 +307,10 @@ geometry_msgs::msg::TwistStamped OmniPidPursuitController::computeVelocityComman
   nav2_costmap_2d::Costmap2D * costmap = costmap_ros_->getCostmap();
   std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap->getMutex()));
 
+  bool using_minco_tracking_path = false;
+  bool minco_terminal_stop = true;
+  global_plan_ = getControllerPlan(pose, using_minco_tracking_path, minco_terminal_stop);
+
   // Transform path to robot base frame
   auto transformed_plan = transformGlobalPlan(pose);
 
@@ -250,7 +336,9 @@ geometry_msgs::msg::TwistStamped OmniPidPursuitController::computeVelocityComman
 
   applyCurvatureLimitation(transformed_plan, carrot_pose, lin_vel);
 
-  applyApproachVelocityScaling(transformed_plan, lin_vel);
+  if (!using_minco_tracking_path || minco_terminal_stop) {
+    applyApproachVelocityScaling(transformed_plan, lin_vel);
+  }
 
   // Transform local frame to global frame to use in collision checking
   nav_msgs::msg::Path costmap_frame_local_plan;
@@ -266,7 +354,14 @@ geometry_msgs::msg::TwistStamped OmniPidPursuitController::computeVelocityComman
 
   geometry_msgs::msg::TwistStamped cmd_vel;
   cmd_vel.header = pose.header;
-  if (!isCollisionDetected(costmap_frame_local_plan)) {
+  const bool skip_collision_check = shouldSkipCollisionCheck();
+  if (skip_collision_check || !isCollisionDetected(costmap_frame_local_plan)) {
+    if (skip_collision_check) {
+      RCLCPP_WARN_THROTTLE(
+        logger_, *clock_, 1000,
+        "PID collision check skipped while navigation mode is '%s'",
+        hole_pass_mode_name_.c_str());
+    }
     cmd_vel.twist.linear.x = lin_vel * cos(theta_dist);
     cmd_vel.twist.linear.y = lin_vel * sin(theta_dist);
     cmd_vel.twist.angular.z = angular_vel;
@@ -277,12 +372,441 @@ geometry_msgs::msg::TwistStamped OmniPidPursuitController::computeVelocityComman
   return cmd_vel;
 }
 
-void OmniPidPursuitController::setPlan(const nav_msgs::msg::Path & path) { global_plan_ = path; }
+void OmniPidPursuitController::setPlan(const nav_msgs::msg::Path & path)
+{
+  std::lock_guard<std::mutex> lock_reinit(mutex_);
+  bt_global_plan_ = path;
+  global_plan_ = path;
+}
 
 void OmniPidPursuitController::setSpeedLimit(
   const double & /*speed_limit*/, const bool & /*percentage*/)
 {
   RCLCPP_WARN(logger_, "Speed limit is not implemented in this controller.");
+}
+
+void OmniPidPursuitController::mincoTrajectoryCallback(const MincoTrajectoryMsg::SharedPtr msg)
+{
+  if (!msg) {
+    return;
+  }
+
+  Trajectory<5> traj;
+  if (!buildTrajectoryFromMsg(*msg, traj)) {
+    RCLCPP_WARN_THROTTLE(
+      logger_, *clock_, 1000,
+      "PID MINCO tracking rejected invalid trajectory: id=%lu waypoints=%zu segments=%zu",
+      static_cast<unsigned long>(msg->trajectory_id), msg->waypoints.size(),
+      msg->segment_times.size());
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(minco_mutex_);
+  const bool new_trajectory =
+    msg->trajectory_id != 0 && msg->trajectory_id != latest_minco_trajectory_id_;
+  const rclcpp::Time receive_time = clock_->now();
+  latest_minco_msg_ = *msg;
+  latest_minco_traj_ = std::make_shared<Trajectory<5>>(traj);
+  latest_minco_receive_time_ = receive_time;
+  if (new_trajectory || latest_minco_first_receive_time_.nanoseconds() == 0) {
+    latest_minco_first_receive_time_ = receive_time;
+  }
+  if (new_trajectory || latest_minco_trajectory_id_ == 0) {
+    try {
+      const rclcpp::Time msg_stamp(msg->header.stamp);
+      const rclcpp::Time start_time(msg->start_time);
+      latest_minco_time_base_offset_sec_ =
+        start_time.nanoseconds() == 0 ? 0.0 : (msg_stamp - start_time).seconds();
+    } catch (const std::runtime_error &) {
+      latest_minco_time_base_offset_sec_ = 0.0;
+    }
+  }
+  latest_minco_trajectory_id_ = msg->trajectory_id;
+  has_latest_minco_traj_ = true;
+}
+
+void OmniPidPursuitController::navigationModeCallback(const std_msgs::msg::String::SharedPtr msg)
+{
+  if (!msg) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(navigation_mode_mutex_);
+  latest_navigation_mode_ = msg->data;
+  latest_navigation_mode_time_ = clock_->now();
+}
+
+bool OmniPidPursuitController::shouldSkipCollisionCheck() const
+{
+  if (!skip_collision_check_in_hole_pass_) {
+    return false;
+  }
+
+  std::string mode;
+  rclcpp::Time mode_time{0, 0, clock_->get_clock_type()};
+  {
+    std::lock_guard<std::mutex> lock(navigation_mode_mutex_);
+    mode = latest_navigation_mode_;
+    mode_time = latest_navigation_mode_time_;
+  }
+
+  if (mode != hole_pass_mode_name_ || mode_time.nanoseconds() == 0) {
+    return false;
+  }
+
+  double age = std::numeric_limits<double>::infinity();
+  try {
+    age = (clock_->now() - mode_time).seconds();
+  } catch (const std::runtime_error &) {
+    return false;
+  }
+
+  if (!std::isfinite(age) || age > navigation_mode_timeout_) {
+    RCLCPP_WARN_THROTTLE(
+      logger_, *clock_, 1000,
+      "PID collision check using normal mode because navigation mode status is stale: age %.3fs > %.3fs",
+      age, navigation_mode_timeout_);
+    return false;
+  }
+
+  return true;
+}
+
+bool OmniPidPursuitController::buildTrajectoryFromMsg(
+  const MincoTrajectoryMsg & msg, Trajectory<5> & traj) const
+{
+  const size_t n = msg.waypoints.size();
+  if (n < 2 || msg.segment_times.size() + 1 != n) {
+    return false;
+  }
+
+  std::vector<Eigen::Vector3d> pts;
+  pts.reserve(n);
+  for (const auto & p : msg.waypoints) {
+    if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) {
+      return false;
+    }
+    pts.emplace_back(p.x, p.y, p.z);
+  }
+
+  Eigen::VectorXd times(static_cast<Eigen::Index>(n - 1));
+  for (size_t i = 0; i + 1 < n; ++i) {
+    const double dt = msg.segment_times[i];
+    if (!std::isfinite(dt) || dt <= 1.0e-4) {
+      return false;
+    }
+    times(static_cast<Eigen::Index>(i)) = dt;
+  }
+
+  const int pieces = static_cast<int>(n) - 1;
+  Eigen::Matrix3d head = Eigen::Matrix3d::Zero();
+  Eigen::Matrix3d tail = Eigen::Matrix3d::Zero();
+  head.col(0) = pts.front();
+  tail.col(0) = pts.back();
+  head.col(1) = Eigen::Vector3d(
+    msg.initial_velocity.x, msg.initial_velocity.y, msg.initial_velocity.z);
+  head.col(2) = Eigen::Vector3d(
+    msg.initial_acceleration.x, msg.initial_acceleration.y, msg.initial_acceleration.z);
+  tail.col(1) = Eigen::Vector3d(
+    msg.terminal_velocity.x, msg.terminal_velocity.y, msg.terminal_velocity.z);
+  tail.col(2) = Eigen::Vector3d(
+    msg.terminal_acceleration.x, msg.terminal_acceleration.y, msg.terminal_acceleration.z);
+
+  Eigen::Matrix3Xd inner(3, std::max(0, pieces - 1));
+  for (int i = 1; i < pieces; ++i) {
+    inner.col(i - 1) = pts[static_cast<size_t>(i)];
+  }
+
+  minco::MINCO_S3NU solver;
+  solver.setConditions(head, tail, pieces);
+  solver.setParameters(inner, times);
+  solver.getTrajectory(traj);
+  return traj.getTotalDuration() > 1.0e-4;
+}
+
+nav_msgs::msg::Path OmniPidPursuitController::sampleMincoTrackingPath(
+  const MincoTrajectoryMsg & msg, const Trajectory<5> & traj, double start_time) const
+{
+  nav_msgs::msg::Path path;
+  path.header = msg.header;
+  path.header.stamp = clock_->now();
+
+  const double duration = traj.getTotalDuration();
+  if (!std::isfinite(duration) || duration <= 1.0e-4) {
+    return path;
+  }
+
+  if (!std::isfinite(start_time)) {
+    start_time = 0.0;
+  }
+  start_time = std::clamp(start_time, 0.0, duration);
+  const double remaining = duration - start_time;
+  if (remaining <= 1.0e-3) {
+    return path;
+  }
+
+  const double desired_duration = std::clamp(
+    remaining, minco_tracking_min_duration_, minco_tracking_max_duration_);
+  const double sample_duration = std::min(remaining, desired_duration);
+  const double end_time = std::min(duration, start_time + sample_duration);
+  const double sample_dt = std::clamp(minco_tracking_sample_dt_, 0.02, 0.50);
+
+  auto append_pose = [&](double t) {
+      const Eigen::Vector3d p = traj.getPos(std::clamp(t, 0.0, duration));
+      if (!std::isfinite(p.x()) || !std::isfinite(p.y()) || !std::isfinite(p.z())) {
+        return;
+      }
+      geometry_msgs::msg::PoseStamped pose;
+      pose.header = path.header;
+      pose.pose.position.x = p.x();
+      pose.pose.position.y = p.y();
+      pose.pose.position.z = p.z();
+      pose.pose.orientation.w = 1.0;
+      if (!path.poses.empty()) {
+        const auto & last = path.poses.back().pose.position;
+        if (std::hypot(p.x() - last.x, p.y() - last.y) < 0.02) {
+          return;
+        }
+      }
+      path.poses.push_back(pose);
+    };
+
+  for (double t = start_time; t < end_time; t += sample_dt) {
+    append_pose(t);
+  }
+  append_pose(end_time);
+
+  if (path.poses.size() < 2 && end_time < duration) {
+    append_pose(std::min(duration, end_time + sample_dt));
+  }
+  updatePathOrientations(path);
+  return path;
+}
+
+nav_msgs::msg::Path OmniPidPursuitController::getControllerPlan(
+  const geometry_msgs::msg::PoseStamped & robot_pose,
+  bool & using_minco, bool & minco_terminal_stop)
+{
+  using_minco = false;
+  minco_terminal_stop = true;
+
+  if (!use_minco_tracking_path_) {
+    return global_plan_;
+  }
+
+  MincoTrajectoryMsg msg;
+  std::shared_ptr<Trajectory<5>> traj;
+  rclcpp::Time receive_time{0, 0, RCL_ROS_TIME};
+  rclcpp::Time first_receive_time{0, 0, RCL_ROS_TIME};
+  double time_base_offset = 0.0;
+  {
+    std::lock_guard<std::mutex> lock(minco_mutex_);
+    if (!has_latest_minco_traj_ || !latest_minco_traj_) {
+      return bt_global_plan_.poses.empty() ? global_plan_ : bt_global_plan_;
+    }
+    msg = latest_minco_msg_;
+    traj = latest_minco_traj_;
+    receive_time = latest_minco_receive_time_;
+    first_receive_time = latest_minco_first_receive_time_;
+    time_base_offset = latest_minco_time_base_offset_sec_;
+  }
+
+  const rclcpp::Time now = clock_->now();
+  double age = std::numeric_limits<double>::infinity();
+  try {
+    age = (now - receive_time).seconds();
+  } catch (const std::runtime_error &) {
+    age = std::numeric_limits<double>::infinity();
+  }
+  if (!std::isfinite(age) || age > minco_tracking_timeout_) {
+    RCLCPP_WARN_THROTTLE(
+      logger_, *clock_, 1000,
+      "PID MINCO tracking fallback to BT path: trajectory age %.3fs > %.3fs",
+      age, minco_tracking_timeout_);
+    return bt_global_plan_.poses.empty() ? global_plan_ : bt_global_plan_;
+  }
+
+  double msg_age = 0.0;
+  double trajectory_time = 0.0;
+  try {
+    msg_age = (now - first_receive_time).seconds();
+    trajectory_time = msg_age + time_base_offset;
+  } catch (const std::runtime_error &) {
+    trajectory_time = 0.0;
+  }
+  trajectory_time = std::clamp(trajectory_time, 0.0, traj->getTotalDuration());
+
+  double projected_time = trajectory_time;
+  if (!projectRobotOntoMincoPath(msg, *traj, robot_pose, trajectory_time, projected_time)) {
+    RCLCPP_WARN_THROTTLE(
+      logger_, *clock_, 1000,
+      "PID MINCO tracking fallback to BT path: robot projection failed");
+    return bt_global_plan_.poses.empty() ? global_plan_ : bt_global_plan_;
+  }
+
+  auto minco_path = sampleMincoTrackingPath(msg, *traj, projected_time);
+  if (minco_path.poses.size() >= 2) {
+    using_minco = true;
+    minco_terminal_stop = msg.terminal_stop;
+    active_controller_plan_ = minco_path;
+    return minco_path;
+  }
+
+  RCLCPP_WARN_THROTTLE(
+    logger_, *clock_, 1000,
+    "PID MINCO tracking fallback to BT path: sampled path has %zu pose(s)",
+    minco_path.poses.size());
+  return bt_global_plan_.poses.empty() ? global_plan_ : bt_global_plan_;
+}
+
+bool OmniPidPursuitController::transformPoseLatest(
+  const std::string & frame,
+  const geometry_msgs::msg::PoseStamped & in_pose,
+  geometry_msgs::msg::PoseStamped & out_pose) const
+{
+  if (in_pose.header.frame_id == frame) {
+    out_pose = in_pose;
+    return true;
+  }
+
+  try {
+    const auto transform = tf_->lookupTransform(frame, in_pose.header.frame_id, tf2::TimePointZero);
+    tf2::doTransform(in_pose, out_pose, transform);
+    out_pose.header.stamp = clock_->now();
+    return true;
+  } catch (tf2::TransformException & ex) {
+    RCLCPP_WARN_THROTTLE(
+      logger_, *clock_, 1000,
+      "PID MINCO tracking latest TF failed: %s", ex.what());
+  }
+  return false;
+}
+
+bool OmniPidPursuitController::projectRobotOntoMincoPath(
+  const MincoTrajectoryMsg & msg,
+  const Trajectory<5> & traj,
+  const geometry_msgs::msg::PoseStamped & robot_pose,
+  double time_seed,
+  double & projected_time)
+{
+  const double duration = traj.getTotalDuration();
+  if (!std::isfinite(duration) || duration <= 1.0e-4) {
+    return false;
+  }
+
+  geometry_msgs::msg::PoseStamped robot_in_traj_frame;
+  if (!transformPoseLatest(msg.header.frame_id, robot_pose, robot_in_traj_frame)) {
+    return false;
+  }
+
+  time_seed = std::clamp(time_seed, 0.0, duration);
+  const rclcpp::Time now = clock_->now();
+  const bool new_traj =
+    msg.trajectory_id != 0 && msg.trajectory_id != last_projected_minco_trajectory_id_;
+  if (new_traj) {
+    last_projected_minco_trajectory_id_ = msg.trajectory_id;
+    last_minco_projected_time_ = 0.0;
+    last_minco_projection_update_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+  }
+
+  double elapsed = control_duration_;
+  if (!new_traj && last_minco_projection_update_time_.nanoseconds() != 0) {
+    try {
+      elapsed = std::clamp((now - last_minco_projection_update_time_).seconds(), 0.0, 0.5);
+    } catch (const std::runtime_error &) {
+      elapsed = control_duration_;
+    }
+  }
+
+  const double max_advance = std::max(
+    minco_projection_max_advance_sec_, elapsed + 2.0 * control_duration_);
+  const double min_time_from_exec =
+    std::clamp(time_seed - std::max(0.0, minco_projection_max_lag_sec_), 0.0, duration);
+  const double seed_center = std::clamp(
+    std::max(last_minco_projected_time_, min_time_from_exec), 0.0, duration);
+  const double search_lo = std::clamp(
+    std::max(
+      seed_center - (new_traj ? control_duration_ : 0.0),
+      min_time_from_exec),
+    0.0, duration);
+  const double search_hi = std::min(
+    duration,
+    std::max(
+      time_seed + minco_projection_search_ahead_sec_,
+      seed_center + std::max(minco_projection_search_ahead_sec_, max_advance)));
+  if (search_hi < search_lo || !std::isfinite(search_lo) || !std::isfinite(search_hi)) {
+    return false;
+  }
+
+  const double rx = robot_in_traj_frame.pose.position.x;
+  const double ry = robot_in_traj_frame.pose.position.y;
+  auto dist2_at = [&](double t) {
+      const Eigen::Vector3d p = traj.getPos(std::clamp(t, 0.0, duration));
+      const double dx = p.x() - rx;
+      const double dy = p.y() - ry;
+      return dx * dx + dy * dy;
+    };
+
+  constexpr int coarse_samples = 10;
+  double best_dist2 = std::numeric_limits<double>::max();
+  double best_t = search_lo;
+  for (int s = 0; s <= coarse_samples; ++s) {
+    const double ratio = static_cast<double>(s) / static_cast<double>(coarse_samples);
+    const double t = search_lo + ratio * (search_hi - search_lo);
+    const double d2 = dist2_at(t);
+    if (d2 < best_dist2) {
+      best_dist2 = d2;
+      best_t = t;
+    }
+  }
+
+  double lo = std::max(search_lo, best_t - 0.1);
+  double hi = std::min(search_hi, best_t + 0.1);
+  for (int i = 0; i < 20; ++i) {
+    const double m1 = lo + (hi - lo) * 0.382;
+    const double m2 = lo + (hi - lo) * 0.618;
+    if (dist2_at(m1) < dist2_at(m2)) {
+      hi = m2;
+    } else {
+      lo = m1;
+    }
+  }
+
+  const double t_proj = std::clamp((lo + hi) * 0.5, search_lo, search_hi);
+  const double lower_bound = new_traj ?
+    search_lo : std::max(last_minco_projected_time_, min_time_from_exec);
+  const double upper_bound = new_traj ?
+    search_hi : std::min(duration, std::max(time_seed, last_minco_projected_time_ + max_advance));
+  last_minco_projected_time_ = std::clamp(t_proj, lower_bound, upper_bound);
+  last_minco_projection_update_time_ = now;
+  projected_time = last_minco_projected_time_;
+
+  RCLCPP_INFO_THROTTLE(
+    logger_, *clock_, 1000,
+    "PID MINCO tracking projection id=%lu t=%.2f seed=%.2f dist=%.2f search=[%.2f, %.2f]",
+    static_cast<unsigned long>(msg.trajectory_id), projected_time, time_seed, std::sqrt(best_dist2),
+    search_lo, search_hi);
+  return true;
+}
+
+void OmniPidPursuitController::updatePathOrientations(nav_msgs::msg::Path & path) const
+{
+  if (path.poses.size() < 2) {
+    return;
+  }
+  for (size_t i = 0; i + 1 < path.poses.size(); ++i) {
+    const auto & p0 = path.poses[i].pose.position;
+    const auto & p1 = path.poses[i + 1].pose.position;
+    const double dx = p1.x - p0.x;
+    const double dy = p1.y - p0.y;
+    if (std::hypot(dx, dy) < 1.0e-6) {
+      continue;
+    }
+    tf2::Quaternion q;
+    q.setRPY(0.0, 0.0, std::atan2(dy, dx));
+    path.poses[i].pose.orientation = tf2::toMsg(q);
+  }
+  path.poses.back().pose.orientation = path.poses[path.poses.size() - 2].pose.orientation;
 }
 
 nav_msgs::msg::Path OmniPidPursuitController::transformGlobalPlan(
@@ -743,6 +1267,25 @@ rcl_interfaces::msg::SetParametersResult OmniPidPursuitController::dynamicParame
         curvature_backward_dist_ = parameter.as_double();
       } else if (name == plugin_name_ + ".max_velocity_scaling_factor_rate") {
         max_velocity_scaling_factor_rate_ = parameter.as_double();
+      } else if (name == plugin_name_ + ".minco_tracking_timeout") {
+        minco_tracking_timeout_ = std::max(0.05, parameter.as_double());
+      } else if (name == plugin_name_ + ".minco_tracking_sample_dt") {
+        minco_tracking_sample_dt_ = std::clamp(parameter.as_double(), 0.02, 0.50);
+      } else if (name == plugin_name_ + ".minco_tracking_min_duration") {
+        minco_tracking_min_duration_ = std::max(0.05, parameter.as_double());
+        minco_tracking_max_duration_ =
+          std::max(minco_tracking_min_duration_, minco_tracking_max_duration_);
+      } else if (name == plugin_name_ + ".minco_tracking_max_duration") {
+        minco_tracking_max_duration_ =
+          std::max(minco_tracking_min_duration_, parameter.as_double());
+      } else if (name == plugin_name_ + ".minco_projection_search_ahead_sec") {
+        minco_projection_search_ahead_sec_ = std::clamp(parameter.as_double(), 0.02, 2.0);
+      } else if (name == plugin_name_ + ".minco_projection_max_advance_sec") {
+        minco_projection_max_advance_sec_ = std::clamp(parameter.as_double(), 0.0, 1.0);
+      } else if (name == plugin_name_ + ".minco_projection_max_lag_sec") {
+        minco_projection_max_lag_sec_ = std::clamp(parameter.as_double(), 0.0, 5.0);
+      } else if (name == plugin_name_ + ".navigation_mode_timeout") {
+        navigation_mode_timeout_ = std::max(0.05, parameter.as_double());
       }
     } else if (type == ParameterType::PARAMETER_BOOL) {
       if (name == plugin_name_ + ".use_velocity_scaled_lookahead_dist") {
@@ -751,6 +1294,17 @@ rcl_interfaces::msg::SetParametersResult OmniPidPursuitController::dynamicParame
         use_interpolation_ = parameter.as_bool();
       } else if (name == plugin_name_ + ".use_rotate_to_heading") {
         use_rotate_to_heading_ = parameter.as_bool();
+      } else if (name == plugin_name_ + ".use_minco_tracking_path") {
+        use_minco_tracking_path_ = parameter.as_bool();
+        if (!use_minco_tracking_path_) {
+          global_plan_ = bt_global_plan_;
+        }
+      } else if (name == plugin_name_ + ".skip_collision_check_in_hole_pass") {
+        skip_collision_check_in_hole_pass_ = parameter.as_bool();
+      }
+    } else if (type == ParameterType::PARAMETER_STRING) {
+      if (name == plugin_name_ + ".hole_pass_mode_name") {
+        hole_pass_mode_name_ = parameter.as_string();
       }
     }
   }

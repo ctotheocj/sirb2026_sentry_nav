@@ -149,6 +149,19 @@ controller_profiles:
         curvature_forward_dist: 0.7
         curvature_backward_dist: 0.3
         max_velocity_scaling_factor_rate: 0.9
+        use_minco_tracking_path: true
+        minco_traj_topic: "trajectory_manager/trajectory_for_mpc"
+        minco_tracking_timeout: 0.5
+        minco_tracking_sample_dt: 0.08
+        minco_tracking_min_duration: 1.0
+        minco_tracking_max_duration: 4.0
+        minco_projection_search_ahead_sec: 0.30
+        minco_projection_max_advance_sec: 0.12
+        minco_projection_max_lag_sec: 0.80
+        skip_collision_check_in_hole_pass: true
+        navigation_mode_topic: "navigation_mode_manager/mode"
+        hole_pass_mode_name: "hole_pass"
+        navigation_mode_timeout: 0.5
 
 sensor_scan_generation:
   ros__parameters:
@@ -322,7 +335,6 @@ bt_navigator:
       yaw_kp: 2.5
       max_v_yaw: 1.8
       raise_duration_sec: 1.0
-      exit_pass_margin: 0.2
       require_navigation_intent: true
       min_goal_direction_cos: 0.2
       min_goal_exit_margin: 0.2
@@ -373,8 +385,33 @@ controller_server:
       yaw_goal_tolerance: 6.28  # 不支持旋转
     FollowPath:
       plugin: "f_mpc_controller::MpcController"
-      debug_logging: true
-      # MPC controller params
+      QX: 50.0
+      QY: 30.0
+      R: 0.1
+      S: 1.0
+      reject_angle_deg: 120.0
+      reject_dist_threshold: 1.5
+      max_consecutive_rejects: 3
+      local_plan_publish_period_sec: 0.10
+      horizon: 10
+      control_frequency: 20.0
+      enable_goal_slowdown: true
+      goal_slowdown_distance: 1.5
+      terminal_weight: 5.0
+      terminal_horizon: 2
+      Qv: 0.5
+      v_ref_max: 3.0
+      k_curvature: 2.0
+      stuck_threshold_frames: 50
+      stuck_lateral_threshold: 0.5
+      ax_max: 5.0
+      ay_max: 5.0
+      curvature_speed_limit_enabled: true
+      lateral_accel_limit: 0.0
+      curvature_speed_limit_min_speed: 0.15
+      v_circle_max: 3.0
+      goal_stop_distance: 0.10
+      brake_safety_factor: 0.7
       use_odometry_state: true
       odom_topic: "odometry"
       state_frame: "gimbal_yaw"
@@ -382,13 +419,12 @@ controller_server:
       max_odom_age_sec: 0.80
       max_odom_predict_dt: 0.10
       enable_measured_velocity_anchor: true
-      velocity_anchor_blend_alpha: 0.45
-      velocity_anchor_lowpass_alpha: 0.65
-      velocity_anchor_max_age_sec: 0.20
-      velocity_anchor_max_jump: 2.0
-      minco_timeout_sec: 0.80
-      minco_goal_reset_tolerance: 0.5
-      reset_warm_start_on_goal_change_only: true
+      velocity_anchor_blend_alpha: 0.30
+      velocity_anchor_lowpass_alpha: 0.50
+      velocity_anchor_max_age_sec: 0.15
+      velocity_anchor_max_jump: 1.5
+      minco_traj_topic: "trajectory_manager/trajectory_for_mpc"
+      fallback_sample_speed: 1.5
       allow_path_fallback_without_minco: false
       minco_unavailable_failure_sec: 0.8
       prevent_tracking_reverse: true
@@ -397,60 +433,37 @@ controller_server:
       reference_direction_constraints_enabled: true
       max_reverse_speed: 0.0
       max_lateral_correction_speed: 0.6
-      collision_stop_failure_sec: 1.0
-      allow_obstacle_retry_without_constraints: false
-      allow_speed_limit_retry_without_limits: false
-      navigation_mode_topic: "navigation_mode_manager/mode"
-      minco_traj_topic: "trajectory_manager/trajectory_for_mpc"
-      QX: 60.0      #10~100，下同
-      QY: 60.0
-      R: 0.08       #0～1
-      S: 0.8
-      Qv: 1.2
-      horizon: 32
-      control_frequency: 30.0
-      local_plan_publish_period_sec: 0.08
-      v_ref_max: 2.5
-      k_curvature: 4.0
-      terminal_weight: 4.0
-      terminal_horizon: 2
-      ax_max: 3.0
-      ay_max: 3.0
-      curvature_speed_limit_enabled: true
-      lateral_accel_limit: 3.0
-      curvature_speed_limit_min_speed: 0.15
-      v_circle_max: 2.5
-      goal_stop_distance: 0.15
-      brake_safety_factor: 0.8
-      pose_jump_speed_threshold: 7.0
-      cmd_lookahead_sec: 0.02
-      minco_projection_search_ahead_sec: 0.20
-      minco_projection_max_advance_sec: 0.08
-      minco_projection_max_lag_sec: 0.45
-      enable_lateral_error_ref_scaling: true
-      lateral_error_slow_threshold: 0.30
-      lateral_error_high_threshold: 0.60
-      min_lateral_ref_time_scale: 0.45
-      enable_pose_jump_damping: true
-      pose_jump_distance_threshold: 0.25
-      pose_jump_damping_scale: 0.35
-      pose_jump_damping_frames: 6
-      reject_angle_deg: 180.0
-      reject_dist_threshold: 2.0 # 距离终点阈值
-      max_consecutive_rejects: 5
-      preserve_warm_start_on_similar_plan: false
+      collision_stop_failure_sec: 0.8
+      minco_timeout_sec: 4.0
+      minco_goal_reset_tolerance: 0.5
+      reset_warm_start_on_goal_change_only: true
+      preserve_warm_start_on_similar_plan: true
       similar_plan_goal_tolerance: 0.5
       similar_plan_anchor_tolerance: 0.5
       similar_plan_forward_distance: 1.5
       similar_plan_max_deviation: 0.4
-      fallback_sample_speed: 0.8
-      enable_goal_slowdown: True
-      goal_slowdown_distance: 1.5
+      cmd_lookahead_sec: 0.01
+      minco_projection_search_ahead_sec: 0.30
+      minco_projection_max_advance_sec: 0.12
+      minco_projection_max_lag_sec: 0.80
+      enable_lateral_error_ref_scaling: true
+      lateral_error_slow_threshold: 0.30
+      lateral_error_high_threshold: 0.60
+      min_lateral_ref_time_scale: 0.60
+      enable_pose_jump_damping: true
+      pose_jump_distance_threshold: 0.25
+      pose_jump_speed_threshold: 6.0
+      pose_jump_damping_scale: 0.35
+      pose_jump_damping_frames: 6
       enable_dynamic_obstacle_avoidance: false
       dynamic_obstacle_topic: "dynamic_obstacles"
       dynamic_safety_margin: 0.3
+      robot_radius: 0.2
       max_dynamic_obstacles: 5
-      robot_radius: 0.2     # 物理机器人半径 (m)，用于 MPC 动态障碍推离计算。
+      allow_obstacle_retry_without_constraints: false
+      allow_speed_limit_retry_without_limits: false
+      navigation_mode_topic: "navigation_mode_manager/mode"
+      debug_logging: false
 
 
 local_costmap:
@@ -658,6 +671,7 @@ behavior_server:
       plugin: "pb_nav2_behaviors/BackUpFreeSpace"
       allow_escape_from_collision: true
       escape_collision_max_distance: 0.45
+      ignore_obstacles_within_radius: 0.30
     wait:
       plugin: "nav2_behaviors/Wait"
     local_frame: odom

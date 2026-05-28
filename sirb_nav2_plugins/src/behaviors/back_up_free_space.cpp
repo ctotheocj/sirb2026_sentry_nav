@@ -53,6 +53,8 @@ void BackUpFreeSpace::onConfigure()
     node, "backup.allow_escape_from_collision", rclcpp::ParameterValue(true));
   nav2_util::declare_parameter_if_not_declared(
     node, "backup.escape_collision_max_distance", rclcpp::ParameterValue(0.45));
+  nav2_util::declare_parameter_if_not_declared(
+    node, "backup.ignore_obstacles_within_radius", rclcpp::ParameterValue(0.0));
 
   node->get_parameter("global_frame", global_frame_);
   node->get_parameter("max_radius", max_radius_);
@@ -61,6 +63,10 @@ void BackUpFreeSpace::onConfigure()
   node->get_parameter("visualize", visualize_);
   node->get_parameter("backup.allow_escape_from_collision", allow_escape_from_collision_);
   node->get_parameter("backup.escape_collision_max_distance", escape_collision_max_distance_);
+  node->get_parameter("backup.ignore_obstacles_within_radius", ignore_obstacles_within_radius_);
+  if (ignore_obstacles_within_radius_ <= 0.0) {
+    ignore_obstacles_within_radius_ = robot_radius_;
+  }
 
   costmap_client_ = node->create_client<nav2_msgs::srv::GetCostmap>(service_name_);
 
@@ -97,6 +103,13 @@ nav2_behaviors::Status BackUpFreeSpace::onRun(
 
   // get costmap
   auto costmap = result.get()->map;
+  if (!costmapValid(costmap)) {
+    RCLCPP_ERROR(
+      logger_, "BackUpFreeSpace received invalid costmap: size=%ux%u data=%zu resolution=%.3f",
+      costmap.metadata.size_x, costmap.metadata.size_y, costmap.data.size(),
+      costmap.metadata.resolution);
+    return nav2_behaviors::Status::FAILED;
+  }
   latest_costmap_ = costmap;
   have_latest_costmap_ = true;
 
@@ -210,6 +223,9 @@ bool BackUpFreeSpace::isOmniCollisionFree(
     if (remaining - std::fabs(sim_position_change) <= 0.0) {
       break;
     }
+    if (distance + std::fabs(sim_position_change) <= ignore_obstacles_within_radius_) {
+      continue;
+    }
 
     geometry_msgs::msg::Pose2D sim_pose = pose2d;
     sim_pose.x = pose2d.x + sim_position_change * dir_x;
@@ -263,11 +279,27 @@ bool BackUpFreeSpace::costAtWorld(double wx, double wy, unsigned char & cost) co
   return true;
 }
 
+bool BackUpFreeSpace::costmapValid(const nav2_msgs::msg::Costmap & costmap) const
+{
+  const auto & meta = costmap.metadata;
+  if (meta.resolution <= 0.0 || meta.size_x == 0 || meta.size_y == 0) {
+    return false;
+  }
+  const size_t expected_size =
+    static_cast<size_t>(meta.size_x) * static_cast<size_t>(meta.size_y);
+  return costmap.data.size() >= expected_size;
+}
+
 float BackUpFreeSpace::findBestDirection(
   const nav2_msgs::msg::Costmap & costmap, geometry_msgs::msg::Pose2D pose, float start_angle,
   float end_angle, float radius, float angle_increment)
 {
   float best_angle = start_angle;
+
+  if (!costmapValid(costmap) || angle_increment <= 0.0f || radius <= 0.0f) {
+    RCLCPP_WARN(logger_, "BackUpFreeSpace cannot search free space with invalid costmap/search params");
+    return best_angle;
+  }
 
   float first_safe_angle = -1.0f;
   float last_unsafe_angle = -1.0f;
@@ -285,20 +317,28 @@ float BackUpFreeSpace::findBestDirection(
   float map_max_x = origin_x + (size_x * resolution);
   float map_min_y = origin_y;
   float map_max_y = origin_y + (size_y * resolution);
+  const float ray_start_radius =
+    std::max(static_cast<float>(robot_radius_), static_cast<float>(ignore_obstacles_within_radius_));
 
   for (float angle = start_angle; angle <= end_angle; angle += angle_increment) {
     bool is_safe = true;
 
-    for (float r = static_cast<float>(robot_radius_); r <= radius; r += resolution) {
+    for (float r = ray_start_radius; r <= radius; r += resolution) {
       float x = pose.x + r * std::cos(angle);
       float y = pose.y + r * std::sin(angle);
 
-      if (x >= map_min_x && x <= map_max_x && y >= map_min_y && y <= map_max_y) {
+      if (x >= map_min_x && x < map_max_x && y >= map_min_y && y < map_max_y) {
         int i = static_cast<int>((x - origin_x) / resolution);
         int j = static_cast<int>((y - origin_y) / resolution);
 
         if (i >= 0 && i < size_x && j >= 0 && j < size_y) {
-          if (static_cast<unsigned char>(costmap.data[i + j * size_x]) >=
+          const size_t idx = static_cast<size_t>(j) * static_cast<size_t>(size_x) +
+            static_cast<size_t>(i);
+          if (idx >= costmap.data.size()) {
+            is_safe = false;
+            break;
+          }
+          if (static_cast<unsigned char>(costmap.data[idx]) >=
             nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE) {
             is_safe = false;
             break;

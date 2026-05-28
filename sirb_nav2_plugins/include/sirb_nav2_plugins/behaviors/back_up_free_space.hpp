@@ -90,6 +90,7 @@ protected:
     geometry_msgs::msg::Twist * cmd_vel,
     const geometry_msgs::msg::Pose2D & pose2d);
   bool costAtWorld(double wx, double wy, unsigned char & cost) const;
+  bool costmapValid(const nav2_msgs::msg::Costmap & costmap) const;
 
   rclcpp::Client<nav2_msgs::srv::GetCostmap>::SharedPtr costmap_client_;
   std::shared_ptr<rclcpp_lifecycle::LifecyclePublisher<visualization_msgs::msg::MarkerArray>>
@@ -103,6 +104,7 @@ protected:
   bool visualize_;
   bool allow_escape_from_collision_{true};
   double escape_collision_max_distance_{0.45};
+  double ignore_obstacles_within_radius_{0.0};
   double selected_global_angle_{0.0};
   nav2_msgs::msg::Costmap latest_costmap_;
   bool have_latest_costmap_{false};

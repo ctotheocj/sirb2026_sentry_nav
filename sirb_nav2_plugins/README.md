@@ -110,7 +110,6 @@ bt_navigator:
       yaw_kp: 2.5
       max_v_yaw: 1.8
       raise_duration_sec: 1.0
-      exit_pass_margin: 0.2
       require_navigation_intent: true
       min_goal_direction_cos: 0.2
       min_goal_exit_margin: 0.2
@@ -126,9 +125,13 @@ The first port reached is treated as entry and the other port as exit. With
 the entry-to-exit direction and closer to the opposite port, so A/B stays unordered and
 bidirectional without lowering for unrelated drive-by motion. Entry sends `HOLE_LOWER`,
 switches `navigation_mode_manager` to `hole_pass`, and keeps publishing `HolePassCmd` on
-`mpc/hole_pass_cmd`. Exit sends `HOLE_RAISE`; after `raise_duration_sec` the mode returns to
-`normal`. The controller then waits until the robot leaves both port polygons before the same
-hole can trigger again.
+`mpc/hole_pass_cmd`. Raising is allowed only while the robot is inside one of the configured
+port polygons: normal completion raises inside the opposite exit port; if the active goal stops
+matching the entry-to-exit intent while lowered, the controller replaces the BT planning goal
+with the original entry-port center, keeps the chassis lowered, and raises only after the robot
+returns to that original entry port. After `raise_duration_sec` the mode returns to `normal`.
+The controller then waits until the robot leaves both port polygons before the same hole can
+trigger again.
 
 Default bringup sets `navigation_mode_manager.semantic_layer_services` for both global and
 local `occupancy_grid_layer` services. Therefore hole-pass mode suppresses the dynamic
@@ -145,8 +148,8 @@ fallback. Products such as `collision_fallback`, `geometry_fallback`, `cached_mi
 trajectory instead of replacing it.
 
 The manager owns the active hole-pass command state. BT halt/destruction and watchdog expiry do
-not restore normal mode by default, so a navigation failure while lowered keeps publishing the
-last desired chassis state instead of raising in the hole. A later BT instance can resume the
+not restore normal mode by default, so a hard action cancel while lowered keeps publishing the
+last lowered chassis state instead of raising outside a port. A later BT instance can resume the
 active mode from `navigation_mode_manager/get_navigation_mode`; entry/exit direction is inferred
 again from the configured hole polygons, current pose, and navigation target rather than stored
 inside the generic mode service.

@@ -9,6 +9,7 @@
                                 robot_frame="gimbal_yaw_fake"
                                 param_prefix="hole_pass"
                                 goals="{goals}"
+                                effective_goals="{hole_effective_goals}"
                                 mode_service="navigation_mode_manager/set_navigation_mode"
                                 mode_status_service="navigation_mode_manager/get_navigation_mode"
                                 refresh_period_sec="0.05"/>
@@ -17,10 +18,10 @@
                         number_of_retries="3">
             <RetryUntilSuccessful num_attempts="2">
               <ReactiveSequence>
-                <RemovePassedGoals input_goals="{goals}"
-                                   output_goals="{goals}"
+                <RemovePassedGoals input_goals="{hole_effective_goals}"
+                                   output_goals="{hole_effective_goals}"
                                    radius="0.7"/>
-                <ComputePathThroughPoses server_timeout="1000" goals="{goals}"
+                <ComputePathThroughPoses server_timeout="1000" goals="{hole_effective_goals}"
                                          path="{candidate_path}"
                                          planner_id="GridBased"/>
                 <GenerateMincoCandidate server_timeout="1000" input_path="{candidate_path}"
@@ -66,10 +67,10 @@
             <ClearEntireCostmap name="ClearGlobalCostmap-Recovery"
                                 service_name="global_costmap/clear_entirely_global_costmap"/>
             <Wait wait_duration="0.20"/>
-            <RemovePassedGoals input_goals="{goals}"
-                               output_goals="{goals}"
+            <RemovePassedGoals input_goals="{hole_effective_goals}"
+                               output_goals="{hole_effective_goals}"
                                radius="0.7"/>
-            <ComputePathThroughPoses server_timeout="1000" goals="{goals}"
+            <ComputePathThroughPoses server_timeout="1000" goals="{hole_effective_goals}"
                                      path="{candidate_path}"
                                      planner_id="GridBased"/>
             <GenerateMincoCandidate server_timeout="1000" input_path="{candidate_path}"
@@ -96,10 +97,10 @@
             <ClearEntireCostmap name="ClearGlobalCostmap-Recovery-2"
                                 service_name="global_costmap/clear_entirely_global_costmap"/>
             <Wait wait_duration="0.25"/>
-            <RemovePassedGoals input_goals="{goals}"
-                               output_goals="{goals}"
+            <RemovePassedGoals input_goals="{hole_effective_goals}"
+                               output_goals="{hole_effective_goals}"
                                radius="0.7"/>
-            <ComputePathThroughPoses server_timeout="1000" goals="{goals}"
+            <ComputePathThroughPoses server_timeout="1000" goals="{hole_effective_goals}"
                                      path="{candidate_path}"
                                      planner_id="GridBased"/>
             <GenerateMincoCandidate server_timeout="1000" input_path="{candidate_path}"

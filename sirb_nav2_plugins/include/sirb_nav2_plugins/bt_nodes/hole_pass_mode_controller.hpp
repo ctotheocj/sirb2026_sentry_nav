@@ -38,15 +38,20 @@ public:
       BT::InputPort<double>("refresh_period_sec", 0.05, "Active command refresh period"),
       BT::InputPort<double>("status_refresh_period_sec", 0.25, "Manager status poll period"),
       BT::InputPort<double>("raise_duration_sec", 1.0, "Raise command hold time before normal mode"),
-      BT::InputPort<double>("exit_pass_margin", 0.2, "Distance past exit center that counts as exit"),
       BT::InputPort<double>("yaw_kp", 2.5, "Yaw velocity proportional gain"),
       BT::InputPort<double>("max_v_yaw", 1.8, "Absolute yaw velocity command limit"),
       BT::InputPort<double>(
         "target_yaw_deg", 0.0,
         "Absolute target yaw in map frame degrees, measured counter-clockwise from map +x"),
       BT::InputPort<geometry_msgs::msg::PoseStamped>("goal", "Navigation goal"),
+      BT::OutputPort<geometry_msgs::msg::PoseStamped>(
+        "effective_goal",
+        "Original goal, or the locked entry-port center while rolling back a canceled hole pass"),
       BT::InputPort<std::vector<geometry_msgs::msg::PoseStamped>>(
         "goals", "Navigation goals"),
+      BT::OutputPort<std::vector<geometry_msgs::msg::PoseStamped>>(
+        "effective_goals",
+        "Original goals, or a single locked entry-port center while rolling back a canceled hole pass"),
       BT::InputPort<bool>(
         "require_navigation_intent", true,
         "Only enter hole mode when the navigation target is beyond the opposite port"),
@@ -86,6 +91,8 @@ private:
     IDLE,
     LOWERING,
     RAISING,
+    ROLLING_BACK,
+    RAISING_AT_ENTRY,
     WAIT_CLEAR,
   };
 
@@ -111,8 +118,13 @@ private:
     Trigger & trigger);
   bool enterHoleMode(const Trigger & trigger, double robot_yaw);
   bool startRaise(double robot_yaw);
+  bool startRaiseAtEntry(double robot_yaw);
   void refreshHoleMode(double robot_yaw, bool update_yaw_command);
   void exitHoleMode(const char * reason);
+  void publishEffectiveTargets();
+  void setRollbackTargets();
+  bool navigationStillMatchesActivePass(bool have_target, double target_x, double target_y);
+  bool activeEntryReached(double robot_x, double robot_y) const;
   bool lockedHoleCleared(double robot_x, double robot_y) const;
   bool exitReached(double robot_x, double robot_y);
   bool triggerMatchesNavigationIntent(
@@ -158,6 +170,11 @@ private:
   std::string locked_hole_id_;
   double active_target_yaw_{0.0};
   double active_v_yaw_{0.0};
+  geometry_msgs::msg::PoseStamped original_goal_;
+  std::vector<geometry_msgs::msg::PoseStamped> original_goals_;
+  bool have_original_goal_{false};
+  bool have_original_goals_{false};
+  geometry_msgs::msg::PoseStamped rollback_goal_;
   std::vector<double> active_entry_polygon_;
   std::vector<double> active_exit_polygon_;
   rclcpp::Time last_refresh_time_;
