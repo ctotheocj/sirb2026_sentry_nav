@@ -122,7 +122,7 @@ def _profile_follow_path_params(data, controller_type):
     if not isinstance(profile, dict):
         return None
     follow = profile.get("FollowPath", {})
-    if isinstance(follow, dict):
+    if isinstance(follow, dict) and follow:
         return dict(follow)
     return None
 
@@ -166,12 +166,12 @@ def apply_controller_profile(data, controller_type):
         controller["FollowPath"] = follow
     else:
         profile_follow = _profile_follow_path_params(data, "mpc")
-        if profile_follow is not None:
-            follow = profile_follow
-        elif _is_mpc_follow_path(current_follow):
+        if _is_mpc_follow_path(current_follow):
             follow = dict(current_follow)
         else:
             follow = _minimal_mpc_follow_path_params(current_follow)
+        if profile_follow is not None:
+            follow.update(profile_follow)
         follow["plugin"] = "f_mpc_controller::MpcController"
         controller["FollowPath"] = follow
 

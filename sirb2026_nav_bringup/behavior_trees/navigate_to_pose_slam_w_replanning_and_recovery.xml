@@ -76,8 +76,6 @@
                                     server_name="trajectory_manager/commit_trajectory"
                                     allow_keep_active_on_reject="false"/>
                 </Sequence>
-                <BackUp backup_dist="0.35"
-                        backup_speed="0.35"/>
                 <Wait wait_duration="0.5"/>
               </RoundRobin>
             </ReactiveFallback>
@@ -95,9 +93,6 @@
       <ReactiveFallback name="RecoveryFallback">
         <GoalUpdated/>
         <RoundRobin name="RecoveryActions">
-          <BackUp backup_dist="0.35"
-                  backup_speed="0.35"/>
-
           <Sequence name="ClearGlobalAndReplan">
             <ClearEntireCostmap name="ClearGlobalCostmap-Recovery"
                                 service_name="global_costmap/clear_entirely_global_costmap"/>
