@@ -3,5 +3,8 @@ bool active
 string mode
 string owner_id
 string hole_id
+string entry_port
+string exit_port
 uint8 hole_cmd
 float32 v_yaw
+float32 pass_progress

@@ -113,6 +113,12 @@ bt_navigator:
       require_navigation_intent: true
       min_goal_direction_cos: 0.2
       min_goal_exit_margin: 0.2
+      allow_split_hole_pass: true
+      port_touch_grace_sec: 3.0
+      port_touch_grace_dist: 1.2
+      corridor_lateral_margin: 0.6
+      goal_side_hysteresis: 0.2
+      hold_active_pass_on_ambiguous_goal: true
       hole_ids: ["hole_1"]
       holes:
         hole_1:
@@ -121,17 +127,25 @@ bt_navigator:
 ```
 
 The first port reached is treated as entry and the other port as exit. With
-`require_navigation_intent` enabled, this only triggers when the active navigation goal is in
-the entry-to-exit direction and closer to the opposite port, so A/B stays unordered and
-bidirectional without lowering for unrelated drive-by motion. Entry sends `HOLE_LOWER`,
-switches `navigation_mode_manager` to `hole_pass`, and keeps publishing `HolePassCmd` on
-`mpc/hole_pass_cmd`. Raising is allowed only while the robot is inside one of the configured
-port polygons: normal completion raises inside the opposite exit port; if the active goal stops
-matching the entry-to-exit intent while lowered, the controller replaces the BT planning goal
-with the original entry-port center, keeps the chassis lowered, and raises only after the robot
-returns to that original entry port. After `raise_duration_sec` the mode returns to `normal`.
-The controller then waits until the robot leaves both port polygons before the same hole can
-trigger again.
+`require_navigation_intent` enabled, a direct trigger only lowers when the active navigation goal
+is in the entry-to-exit direction and closer to the opposite port, so A/B stays unordered and
+bidirectional without lowering for unrelated drive-by motion. The controller also supports split
+hole-pass commands: touching a port records a short-lived `port_touch`, and a later goal to the
+opposite side within `port_touch_grace_sec` and `port_touch_grace_dist` starts the same logical
+hole-pass transaction. A robot already in the corridor between port centers can also recover the
+transaction when the goal clearly points to one side.
+
+Entry sends `HOLE_LOWER`, switches `navigation_mode_manager` to `hole_pass`, and keeps publishing
+`HolePassCmd` on `mpc/hole_pass_cmd`. The manager persists the active `entry_port`, `exit_port`,
+and `pass_progress`, so a later BT instance resumes the same transaction instead of inferring
+direction from the latest goal. While lowered, refreshed goals are classified relative to the
+locked transaction: a clear exit-side goal continues through the hole, a clear entry-side goal
+keeps the chassis lowered and rolls back to the original entry port, and an ambiguous or jittery
+goal can hold the BT effective target at the exit port when
+`hold_active_pass_on_ambiguous_goal` is true. Raising is allowed only inside a configured port:
+normal completion raises inside the opposite exit port; rollback raises inside the original entry
+port. After `raise_duration_sec` the mode returns to `normal`. The controller then waits until the
+robot leaves both port polygons before the same hole can trigger again.
 
 Default bringup sets `navigation_mode_manager.semantic_layer_services` for both global and
 local `occupancy_grid_layer` services. Therefore hole-pass mode suppresses the dynamic
@@ -150,9 +164,10 @@ trajectory instead of replacing it.
 The manager owns the active hole-pass command state. BT halt/destruction and watchdog expiry do
 not restore normal mode by default, so a hard action cancel while lowered keeps publishing the
 last lowered chassis state instead of raising outside a port. A later BT instance can resume the
-active mode from `navigation_mode_manager/get_navigation_mode`; entry/exit direction is inferred
-again from the configured hole polygons, current pose, and navigation target rather than stored
-inside the generic mode service.
+active mode from `navigation_mode_manager/get_navigation_mode` using the stored hole id,
+entry/exit ports, command, yaw-rate command, and progress. Direction inference from the configured
+hole polygons, current pose, and navigation target is only a fallback for legacy or incomplete
+manager state.
 
 The target chassis heading is `target_yaw_deg`: an absolute yaw in the map frame, measured
 counter-clockwise from map +x in degrees. `HolePassCmd.v_yaw` is the yaw-rate command in rad/s

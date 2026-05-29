@@ -338,6 +338,12 @@ bt_navigator:
       require_navigation_intent: true
       min_goal_direction_cos: 0.2
       min_goal_exit_margin: 0.2
+      allow_split_hole_pass: true
+      port_touch_grace_sec: 3.0
+      port_touch_grace_dist: 1.2
+      corridor_lateral_margin: 0.6
+      goal_side_hysteresis: 0.2
+      hold_active_pass_on_ambiguous_goal: true
       hole_ids: ["hole_1", "hole_2"]
       holes:
         hole_1:

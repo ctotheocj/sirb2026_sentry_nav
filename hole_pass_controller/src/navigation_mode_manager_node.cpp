@@ -16,6 +16,19 @@ bool validHoleCommand(uint8_t cmd)
   return cmd == sentry_nav_interfaces::msg::HolePassCmd::HOLE_RAISE ||
     cmd == sentry_nav_interfaces::msg::HolePassCmd::HOLE_LOWER;
 }
+
+bool validPort(const std::string & port)
+{
+  return port == "A" || port == "B";
+}
+
+float normalizedProgress(float progress)
+{
+  if (!std::isfinite(progress)) {
+    return 0.0F;
+  }
+  return std::clamp(progress, 0.0F, 1.0F);
+}
 }  // namespace
 
 NavigationModeManagerNode::NavigationModeManagerNode(const rclcpp::NodeOptions & options)
@@ -87,9 +100,12 @@ void NavigationModeManagerNode::handleGetMode(
   response->mode = hole_mode_active_ ? "hole_pass" : "normal";
   response->owner_id = active_owner_id_;
   response->hole_id = active_hole_id_;
+  response->entry_port = active_entry_port_;
+  response->exit_port = active_exit_port_;
   response->hole_cmd = hole_mode_active_ ?
     active_hole_cmd_ : sentry_nav_interfaces::msg::HolePassCmd::HOLE_RAISE;
   response->v_yaw = hole_mode_active_ ? active_v_yaw_ : 0.0F;
+  response->pass_progress = hole_mode_active_ ? active_pass_progress_ : 0.0F;
 }
 
 bool NavigationModeManagerNode::enterHolePass(
@@ -97,6 +113,15 @@ bool NavigationModeManagerNode::enterHolePass(
 {
   if (request.owner_id.empty()) {
     message = "owner_id is empty";
+    return false;
+  }
+  const bool has_ports = !request.entry_port.empty() || !request.exit_port.empty();
+  if (has_ports &&
+    (!validPort(request.entry_port) || !validPort(request.exit_port) ||
+    request.entry_port == request.exit_port))
+  {
+    message = "invalid hole pass ports entry='" + request.entry_port + "' exit='" +
+      request.exit_port + "'";
     return false;
   }
   if (hole_mode_active_) {
@@ -116,10 +141,15 @@ bool NavigationModeManagerNode::enterHolePass(
     if (!request.hole_id.empty()) {
       active_hole_id_ = request.hole_id;
     }
+    if (has_ports) {
+      active_entry_port_ = request.entry_port;
+      active_exit_port_ = request.exit_port;
+    }
     if (validHoleCommand(request.hole_cmd)) {
       active_hole_cmd_ = request.hole_cmd;
     }
     active_v_yaw_ = std::isfinite(request.v_yaw) ? request.v_yaw : 0.0F;
+    active_pass_progress_ = normalizedProgress(request.pass_progress);
     const double timeout = request.watchdog_timeout_sec > 0.0F ?
       static_cast<double>(request.watchdog_timeout_sec) : default_watchdog_timeout_sec_;
     active_deadline_ = now() + rclcpp::Duration::from_seconds(std::max(0.5, timeout));
@@ -139,6 +169,9 @@ bool NavigationModeManagerNode::enterHolePass(
     hole_mode_active_ = false;
     active_owner_id_.clear();
     active_hole_id_.clear();
+    active_entry_port_.clear();
+    active_exit_port_.clear();
+    active_pass_progress_ = 0.0F;
     active_deadline_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
     message = rollback_ok ?
       "failed to enter hole_pass mode; rolled back to normal" :
@@ -150,9 +183,12 @@ bool NavigationModeManagerNode::enterHolePass(
   hole_mode_active_ = true;
   active_owner_id_ = request.owner_id;
   active_hole_id_ = request.hole_id;
+  active_entry_port_ = request.entry_port;
+  active_exit_port_ = request.exit_port;
   active_hole_cmd_ = validHoleCommand(request.hole_cmd) ?
     request.hole_cmd : sentry_nav_interfaces::msg::HolePassCmd::HOLE_LOWER;
   active_v_yaw_ = std::isfinite(request.v_yaw) ? request.v_yaw : 0.0F;
+  active_pass_progress_ = normalizedProgress(request.pass_progress);
   const double timeout = request.watchdog_timeout_sec > 0.0F ?
     static_cast<double>(request.watchdog_timeout_sec) : default_watchdog_timeout_sec_;
   active_deadline_ = now() + rclcpp::Duration::from_seconds(std::max(0.5, timeout));
@@ -184,8 +220,11 @@ bool NavigationModeManagerNode::restoreNormal(const std::string & owner_id, std:
   hole_mode_active_ = false;
   active_hole_cmd_ = sentry_nav_interfaces::msg::HolePassCmd::HOLE_RAISE;
   active_v_yaw_ = 0.0F;
+  active_pass_progress_ = 0.0F;
   active_owner_id_.clear();
   active_hole_id_.clear();
+  active_entry_port_.clear();
+  active_exit_port_.clear();
   active_deadline_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
   watchdog_reported_ = false;
   publishHoleCommand();

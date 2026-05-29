@@ -61,6 +61,24 @@ public:
       BT::InputPort<double>(
         "min_goal_exit_margin", 0.2,
         "Target must be this much closer to the exit port than the entry port"),
+      BT::InputPort<bool>(
+        "allow_split_hole_pass", true,
+        "Allow a recent port touch and a later opposite-side goal to form one hole-pass transaction"),
+      BT::InputPort<double>(
+        "port_touch_grace_sec", 3.0,
+        "Maximum age of a port touch that may start a split hole-pass transaction"),
+      BT::InputPort<double>(
+        "port_touch_grace_dist", 1.2,
+        "Maximum robot distance from the touched port center for split hole-pass association"),
+      BT::InputPort<double>(
+        "corridor_lateral_margin", 0.6,
+        "Maximum lateral distance from the port-center segment for corridor hole-pass recovery"),
+      BT::InputPort<double>(
+        "goal_side_hysteresis", 0.2,
+        "Extra side margin used to classify active pass goals as continue or return"),
+      BT::InputPort<bool>(
+        "hold_active_pass_on_ambiguous_goal", true,
+        "Keep the active hole-pass transaction when the refreshed goal is not clearly continue/return"),
     };
   }
 
@@ -86,6 +104,16 @@ private:
     double path_yaw{0.0};
   };
 
+  struct PortTouch
+  {
+    bool valid{false};
+    std::string hole_id;
+    std::string port;
+    rclcpp::Time stamp;
+    double x{0.0};
+    double y{0.0};
+  };
+
   enum class ModeState
   {
     IDLE,
@@ -96,6 +124,13 @@ private:
     WAIT_CLEAR,
   };
 
+  enum class GoalIntent
+  {
+    SAME_PASS,
+    RETURN_TO_ENTRY,
+    AMBIGUOUS,
+  };
+
   std::vector<Hole> loadHoles();
   Trigger findTrigger(
     const std::vector<Hole> & holes,
@@ -104,6 +139,33 @@ private:
     bool have_target,
     double target_x,
     double target_y);
+  Trigger findDirectTrigger(
+    const std::vector<Hole> & holes,
+    double robot_x,
+    double robot_y,
+    bool have_target,
+    double target_x,
+    double target_y);
+  Trigger findSplitTriggerFromTouch(
+    const std::vector<Hole> & holes,
+    double robot_x,
+    double robot_y,
+    bool have_target,
+    double target_x,
+    double target_y);
+  Trigger findCorridorTrigger(
+    const std::vector<Hole> & holes,
+    double robot_x,
+    double robot_y,
+    bool have_target,
+    double target_x,
+    double target_y);
+  void updatePortTouch(const std::vector<Hole> & holes, double robot_x, double robot_y);
+  bool buildTriggerFromPorts(
+    const std::string & hole_id,
+    const std::string & entry_port,
+    const std::string & exit_port,
+    Trigger & trigger);
   bool getRobotPose(double & x, double & y, double & yaw);
   bool getNavigationTarget(double & x, double & y);
   bool syncActiveModeFromManager();
@@ -116,14 +178,17 @@ private:
     double target_x,
     double target_y,
     Trigger & trigger);
-  bool enterHoleMode(const Trigger & trigger, double robot_yaw);
+  bool enterHoleMode(const Trigger & trigger, double robot_yaw, double robot_x, double robot_y);
   bool startRaise(double robot_yaw);
   bool startRaiseAtEntry(double robot_yaw);
-  void refreshHoleMode(double robot_yaw, bool update_yaw_command);
+  void refreshHoleMode(double robot_yaw, bool update_yaw_command, double progress);
   void exitHoleMode(const char * reason);
   void publishEffectiveTargets();
   void setRollbackTargets();
-  bool navigationStillMatchesActivePass(bool have_target, double target_x, double target_y);
+  void setPortCenterTarget(
+    const std::vector<double> & polygon,
+    geometry_msgs::msg::PoseStamped & goal);
+  GoalIntent classifyGoalIntent(bool have_target, double target_x, double target_y);
   bool activeEntryReached(double robot_x, double robot_y) const;
   bool lockedHoleCleared(double robot_x, double robot_y) const;
   bool exitReached(double robot_x, double robot_y);
@@ -132,6 +197,18 @@ private:
     const std::vector<double> & exit,
     double target_x,
     double target_y);
+  bool targetMatchesDirection(
+    const std::vector<double> & entry,
+    const std::vector<double> & exit,
+    double target_x,
+    double target_y,
+    double exit_margin);
+  double passProgress(double robot_x, double robot_y) const;
+  double pointProjectionAlongPass(double x, double y) const;
+  double pointLateralDistanceToActivePass(double x, double y) const;
+  const std::vector<double> * portPolygon(const Hole & hole, const std::string & port) const;
+  std::string oppositePort(const std::string & port) const;
+  const char * goalIntentName(GoalIntent intent) const;
   double targetYawFromParameter();
   double activeVYaw(double robot_yaw);
   std::string paramPrefix() const;
@@ -140,8 +217,11 @@ private:
   bool callSetNavigationMode(
     const std::string & mode,
     const std::string & hole_id,
+    const std::string & entry_port,
+    const std::string & exit_port,
     uint8_t hole_cmd,
-    double v_yaw);
+    double v_yaw,
+    double pass_progress);
   bool callGetNavigationMode(
     sentry_nav_interfaces::srv::GetNavigationMode::Response & response);
 
@@ -170,13 +250,16 @@ private:
   std::string locked_hole_id_;
   double active_target_yaw_{0.0};
   double active_v_yaw_{0.0};
+  double active_pass_progress_{0.0};
   geometry_msgs::msg::PoseStamped original_goal_;
   std::vector<geometry_msgs::msg::PoseStamped> original_goals_;
   bool have_original_goal_{false};
   bool have_original_goals_{false};
+  bool hold_active_target_at_exit_{false};
   geometry_msgs::msg::PoseStamped rollback_goal_;
   std::vector<double> active_entry_polygon_;
   std::vector<double> active_exit_polygon_;
+  PortTouch last_port_touch_;
   rclcpp::Time last_refresh_time_;
   rclcpp::Time last_status_sync_time_;
   rclcpp::Time raise_start_time_;

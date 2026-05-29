@@ -62,8 +62,11 @@ private:
   bool watchdog_reported_{false};
   uint8_t active_hole_cmd_{sentry_nav_interfaces::msg::HolePassCmd::HOLE_RAISE};
   float active_v_yaw_{0.0F};
+  float active_pass_progress_{0.0F};
   std::string active_owner_id_;
   std::string active_hole_id_;
+  std::string active_entry_port_;
+  std::string active_exit_port_;
   rclcpp::Time active_deadline_{0, 0, RCL_ROS_TIME};
 };
 
